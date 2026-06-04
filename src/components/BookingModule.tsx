@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import ImportExportManager from './ImportExportManager';
+import PricingSettings from './PricingSettings';
+import DailyUsageDashboard from './DailyUsageDashboard';
 import { 
   Plus, 
   Search, 
@@ -26,7 +29,7 @@ import {
   TrendingUp,
   Download
 } from 'lucide-react';
-import { BookingItem, B2BPartner, Supplier, Language, HotelContract, RoomAllocation, MealsConfig, AdditionalService } from '../types';
+import { BookingItem, B2BPartner, Supplier, Language, HotelContract, RoomAllocation, MealsConfig, AdditionalService, PricingRule } from '../types';
 import { TRANSLATIONS } from '../Translations';
 
 interface BookingModuleProps {
@@ -34,9 +37,11 @@ interface BookingModuleProps {
   partners: B2BPartner[];
   suppliers: Supplier[];
   hotelContracts: HotelContract[];
+  pricingRules: PricingRule[];
   lang: Language;
   onSaveBooking: (booking: Partial<BookingItem>, id?: string) => Promise<void>;
   onDeleteBooking: (id: string) => Promise<void>;
+  onRefreshDatabase: () => Promise<void>;
   currentUserEmail: string;
   currentUserName: string;
 }
@@ -75,16 +80,18 @@ export default function BookingModule({
   partners,
   suppliers,
   hotelContracts,
+  pricingRules,
   lang,
   onSaveBooking,
   onDeleteBooking,
+  onRefreshDatabase,
   currentUserEmail,
   currentUserName
 }: BookingModuleProps) {
   const t = (key: string) => TRANSLATIONS[lang][key] || key;
 
   // Primary Workspace tab: 'list' (manage bookings & create/edit form), 'inventory' (view hotel contracted capacity), 'reports' (reservation reports)
-  const [activeSubTab, setActiveSubTab] = useState<'list' | 'inventory' | 'reports'>('list');
+  const [activeSubTab, setActiveSubTab] = useState<'list' | 'inventory' | 'daily_usage' | 'settings' | 'reports'>('list');
 
   // Search/Filters
   const [search, setSearch] = useState('');
@@ -101,6 +108,7 @@ export default function BookingModule({
     customerName: '',
     customerPhone: '',
     customerEmail: '',
+    aeroRef: '',
     bookingType: 'Umrah Package',
     packageName: PACKAGE_TEMPLATES[0].name,
     paxCount: 2,
@@ -228,22 +236,53 @@ export default function BookingModule({
     const makkahContract = hotelContracts.find(c => c.hotelName === selectedMakkahHotel && c.location === 'Makkah');
     const madinahContract = hotelContracts.find(c => c.hotelName === selectedMadinahHotel && c.location === 'Madinah');
 
+    const targetPackageType = selectionType === 'Room Only' ? 'Room only' : 'Full Umrah package';
+
     const updatedAllocations = currentForm.roomAllocations?.map((alloc) => {
-      let contractRate = 0;
-      if (selectionType === 'Makkah Only' && makkahContract) {
-        const rCap = makkahContract.rooms.find(r => r.roomType === alloc.roomType);
-        if (rCap) contractRate = rCap.contractRateMYR;
-      } else if (selectionType === 'Madinah Only' && madinahContract) {
-        const rCap = madinahContract.rooms.find(r => r.roomType === alloc.roomType);
-        if (rCap) contractRate = rCap.contractRateMYR;
-      } else if (selectionType === 'Room Only' || selectionType === 'Full Umrah Package' || selectionType === 'Makkah + Madinah') {
-        const makkahR = makkahContract?.rooms.find(r => r.roomType === alloc.roomType)?.contractRateMYR || 0;
-        const madinahR = madinahContract?.rooms.find(r => r.roomType === alloc.roomType)?.contractRateMYR || 0;
-        contractRate = makkahR + madinahR;
+      if (alloc.isManualOverride) {
+        return alloc;
       }
+      let makkahRate = 0;
+      let madinahRate = 0;
+
+      // 1. Resolve Makkah Portion
+      if (selectionType !== 'Madinah Only') {
+        const makkahRule = pricingRules?.find(r => r.hotelName === selectedMakkahHotel && r.roomType === alloc.roomType && r.packageType === targetPackageType);
+        if (makkahRule) {
+          makkahRate = makkahRule.priceMYR;
+        } else if (makkahContract) {
+          const rCap = makkahContract.rooms.find(r => r.roomType === alloc.roomType);
+          if (rCap) makkahRate = rCap.contractRateMYR;
+        }
+      }
+
+      // 2. Resolve Madinah Portion
+      if (selectionType !== 'Makkah Only') {
+        const madinahRule = pricingRules?.find(r => r.hotelName === selectedMadinahHotel && r.roomType === alloc.roomType && r.packageType === targetPackageType);
+        if (madinahRule) {
+          madinahRate = madinahRule.priceMYR;
+        } else if (madinahContract) {
+          const rCap = madinahContract.rooms.find(r => r.roomType === alloc.roomType);
+          if (rCap) madinahRate = rCap.contractRateMYR;
+        }
+      }
+
+      let finalRate = makkahRate + madinahRate;
+
+      // 3. Fallback to Global All-Hotels Rule if no specific hotel rule was configured
+      const makkahMatchedSpecialRule = pricingRules?.some(r => r.hotelName === selectedMakkahHotel && r.roomType === alloc.roomType && r.packageType === targetPackageType);
+      const madinahMatchedSpecialRule = pricingRules?.some(r => r.hotelName === selectedMadinahHotel && r.roomType === alloc.roomType && r.packageType === targetPackageType);
+      
+      if (!makkahMatchedSpecialRule && !madinahMatchedSpecialRule) {
+        const globalRule = pricingRules?.find(r => r.hotelName === 'All Hotels' && r.roomType === alloc.roomType && r.packageType === targetPackageType);
+        if (globalRule) {
+          finalRate = globalRule.priceMYR;
+        }
+      }
+
       return {
         ...alloc,
-        ratePerRoom: contractRate > 0 ? contractRate : alloc.ratePerRoom
+        ratePerRoom: finalRate > 0 ? finalRate : alloc.ratePerRoom
       };
     }) || [];
 
@@ -280,6 +319,45 @@ export default function BookingModule({
     updateFormStateAndTotals(partialForm);
   };
 
+  const handleRoomRateChange = (roomType: string, newRate: number) => {
+    const updatedAllocations = form.roomAllocations?.map((alloc) => {
+      if (alloc.roomType === roomType) {
+        return { 
+          ...alloc, 
+          ratePerRoom: Math.max(0, newRate), 
+          isManualOverride: true 
+        };
+      }
+      return alloc;
+    }) || [];
+
+    const partialForm = {
+      ...form,
+      roomAllocations: updatedAllocations
+    };
+
+    updateFormStateAndTotals(partialForm);
+  };
+
+  const handleResetRoomRate = (roomType: string) => {
+    const updatedAllocations = form.roomAllocations?.map((alloc) => {
+      if (alloc.roomType === roomType) {
+        return { 
+          ...alloc, 
+          isManualOverride: false 
+        };
+      }
+      return alloc;
+    }) || [];
+
+    const partialForm = {
+      ...form,
+      roomAllocations: updatedAllocations
+    };
+
+    updateFormStateAndTotals(partialForm);
+  };
+
   const syncPaxToBeds = () => {
     if (currentBeddingSumCapacity > 0) {
       updateFormStateAndTotals({
@@ -298,6 +376,7 @@ export default function BookingModule({
       customerName: '',
       customerPhone: '',
       customerEmail: '',
+      aeroRef: '',
       bookingType: 'Umrah Package',
       packageName: PACKAGE_TEMPLATES[0].name,
       paxCount: 2,
@@ -350,6 +429,7 @@ export default function BookingModule({
 
     const currentForm = {
       ...b,
+      aeroRef: b.aeroRef || '',
       hotelSelectionType: b.hotelSelectionType || 'Full Umrah Package',
       roomAllocations: b.roomAllocations && b.roomAllocations.length > 0 ? b.roomAllocations : defaultAllocations,
       mealsConfig: b.mealsConfig || {
@@ -526,6 +606,7 @@ export default function BookingModule({
   const filteredBookings = bookings.filter(b => {
     const matchesSearch = b.customerName.toLowerCase().includes(search.toLowerCase()) || 
                           b.id.toLowerCase().includes(search.toLowerCase()) ||
+                          (b.aeroRef && b.aeroRef.toLowerCase().includes(search.toLowerCase())) ||
                           (b.packageName && b.packageName.toLowerCase().includes(search.toLowerCase()));
     
     const matchesStatus = statusFilter === 'All' ? true : b.bookingStatus === statusFilter;
@@ -636,7 +717,7 @@ export default function BookingModule({
         </div>
         
         {!isEditing && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => setActiveSubTab('list')}
               className={`px-3 py-1.8 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${activeSubTab === 'list' ? 'bg-emerald-800 text-white shadow-xs' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
@@ -652,8 +733,24 @@ export default function BookingModule({
               Hotel Contracts & Inventory
             </button>
             <button
+              onClick={() => setActiveSubTab('daily_usage')}
+              id="daily_usage_tab_btn"
+              className={`px-3 py-1.8 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${activeSubTab === 'daily_usage' ? 'bg-emerald-800 text-white shadow-xs' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              Daily Rooms Usage
+            </button>
+            <button
+              onClick={() => setActiveSubTab('settings')}
+              id="pricing_settings_tab_btn"
+              className={`px-3 py-1.8 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${activeSubTab === 'settings' ? 'bg-emerald-800 text-white shadow-xs' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
+            >
+              <DollarSign className="w-3.5 h-3.5" />
+              Pricing Settings
+            </button>
+            <button
               onClick={() => setActiveSubTab('reports')}
-              className={`px-3 py-1.8 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${activeSubTab === 'reports' ? 'bg-emerald-800 text-white shadow-xs' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
+              className={`px-3 py-1.8 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${activeSubTab === 'reports' ? 'bg-emerald-850 text-white shadow-xs' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
             >
               <BarChart3 className="w-3.5 h-3.5" />
               Operational Reports
@@ -684,7 +781,7 @@ export default function BookingModule({
             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5 uppercase tracking-wider">
               <User className="w-4 h-4 text-emerald-800" /> Roster / Group Contact Information
             </h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div>
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">Roster Lead Pilgrim Name</label>
                 <input
@@ -716,6 +813,16 @@ export default function BookingModule({
                   required
                   className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:ring-1 focus:ring-emerald-800 focus:outline-none"
                   placeholder="shah@gmail.com"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-emerald-800 uppercase tracking-wide flex items-center gap-1">AERO REF ID <span className="text-[8px] text-slate-400 font-normal normales">(for grouping)</span></label>
+                <input
+                  type="text"
+                  value={form.aeroRef || ''}
+                  onChange={e => setForm({ ...form, aeroRef: e.target.value })}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-emerald-950 focus:ring-1 focus:ring-emerald-800 focus:outline-none border-emerald-300"
+                  placeholder="e.g. AERO 48-092"
                 />
               </div>
             </div>
@@ -860,7 +967,37 @@ export default function BookingModule({
                 <div key={alloc.roomType} className="bg-white border border-slate-200 rounded-xl p-3.5 space-y-1 hover:border-emerald-700 transition-colors">
                   <span className="text-[10px] font-black text-slate-400 block uppercase">{alloc.roomType} Room</span>
                   <strong className="text-slate-900 text-xs block font-bold">{alloc.capacity} beds capacity</strong>
-                  <div className="text-[10px] text-slate-450 mt-1 block">Contract Rate: <span className="text-emerald-800 font-extrabold">{alloc.ratePerRoom} MYR</span> /night</div>
+                  
+                  {/* Dynamic & Manual Rate Modifier Block */}
+                  <div className="space-y-1 pt-1.5 pb-1">
+                    <label className="text-[9px] font-extrabold text-slate-450 block uppercase tracking-wider">
+                      Price per Night
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1 text-slate-400 font-bold text-[10px]">MYR</span>
+                      <input
+                        type="number"
+                        value={alloc.ratePerRoom || ''}
+                        onChange={(e) => handleRoomRateChange(alloc.roomType, parseFloat(e.target.value) || 0)}
+                        className={`w-full text-xs font-black pl-11 pr-2 py-1 rounded-lg border outline-hidden transition-all ${
+                          alloc.isManualOverride 
+                            ? 'bg-amber-50 border-amber-300 text-amber-950 focus:border-amber-500' 
+                            : 'bg-slate-50 border-slate-200 text-slate-800 focus:border-emerald-700 focus:bg-white'
+                        }`}
+                        title="Modify rate manually"
+                        placeholder="0"
+                      />
+                    </div>
+                    {alloc.isManualOverride && (
+                      <button
+                        type="button"
+                        onClick={() => handleResetRoomRate(alloc.roomType)}
+                        className="text-[9px] font-bold text-amber-700 hover:text-amber-900 flex items-center justify-end w-full gap-0.5 mt-0.5 cursor-pointer underline select-none"
+                      >
+                        Reset to default rate
+                      </button>
+                    )}
+                  </div>
                   
                   <div className="flex items-center justify-between pt-2">
                     <button
@@ -1227,6 +1364,14 @@ export default function BookingModule({
           {/* Sub-tab 1: Reservations list block */}
           {activeSubTab === 'list' && (
             <div className="space-y-4">
+              {/* Excel / CSV Import & Export integration Panel */}
+              <ImportExportManager 
+                bookings={bookings}
+                hotelContracts={hotelContracts}
+                partners={partners}
+                onRefreshDatabase={onRefreshDatabase}
+                onSaveBooking={async (b) => { await onSaveBooking(b); }}
+              />
               {/* Search and filters workspace */}
               <div className="bg-white rounded-2xl p-4 border border-slate-200 flex flex-col md:flex-row gap-4 items-center justify-between">
                 <div className="relative w-full md:w-80">
@@ -1315,6 +1460,9 @@ export default function BookingModule({
                                 <div className="flex flex-wrap items-center gap-1 pt-1">
                                   <span className="text-[9px] bg-slate-100 border border-slate-200 text-slate-600 px-2 py-0.5 rounded font-bold">{b.bookingType}</span>
                                   <span className="text-[9px] bg-emerald-50 text-emerald-800 border border-emerald-100 px-2 py-0.5 rounded font-extrabold">{b.packageName}</span>
+                                  {b.aeroRef && (
+                                    <span className="text-[9px] bg-sky-55 text-sky-850 border border-sky-200 px-2 py-0.5 rounded-sm font-extrabold font-mono uppercase tracking-wider">Aero Ref: {b.aeroRef}</span>
+                                  )}
                                 </div>
                               </td>
                               <td className="py-4 px-6 max-w-xs space-y-1">
@@ -1471,6 +1619,24 @@ export default function BookingModule({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Sub-tab 2b: Daily Rooms Usage Tracker */}
+          {activeSubTab === 'daily_usage' && (
+            <DailyUsageDashboard 
+              bookings={bookings}
+              hotelContracts={hotelContracts}
+            />
+          )}
+
+          {/* Sub-tab 2c: Dynamic Pricing settings Matrix */}
+          {activeSubTab === 'settings' && (
+            <PricingSettings 
+              pricingRules={pricingRules}
+              hotelContracts={hotelContracts}
+              onRefreshDatabase={onRefreshDatabase}
+              currentUserEmail={currentUserEmail}
+            />
           )}
 
           {/* Sub-tab 3: Reservation Operational Reports with SVG Graphs */}

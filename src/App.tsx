@@ -30,7 +30,8 @@ import {
   Employee, 
   ActivityLog, 
   Language,
-  HotelContract
+  HotelContract,
+  PricingRule
 } from './types';
 
 import { TRANSLATIONS } from './Translations';
@@ -62,6 +63,7 @@ export default function App() {
     employees: Employee[];
     logs: ActivityLog[];
     hotelContracts?: HotelContract[];
+    pricingRules?: PricingRule[];
   }>({
     bookings: [],
     invoices: [],
@@ -70,7 +72,8 @@ export default function App() {
     transactions: [],
     employees: [],
     logs: [],
-    hotelContracts: []
+    hotelContracts: [],
+    pricingRules: []
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -676,9 +679,11 @@ export default function App() {
                 partners={db.partners}
                 suppliers={db.suppliers}
                 hotelContracts={db.hotelContracts || []}
+                pricingRules={db.pricingRules || []}
                 lang={lang}
                 onSaveBooking={handleSaveBooking}
                 onDeleteBooking={handleDeleteBooking}
+                onRefreshDatabase={fetchDatabase}
                 currentUserEmail="finance@aero-star.co"
                 currentUserName="Ahmad Farhan"
               />
@@ -688,8 +693,11 @@ export default function App() {
             {activeTab === 'invoices' && (
               <InvoiceModule 
                 invoices={db.invoices}
+                bookings={db.bookings || []}
+                partners={db.partners || []}
                 lang={lang}
                 onUpdateInvoicePayment={handleUpdateInvoicePayment}
+                onRefreshDatabase={fetchDatabase}
               />
             )}
 

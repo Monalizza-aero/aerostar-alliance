@@ -5,6 +5,7 @@ export interface RoomAllocation {
   count: number;
   capacity: number;
   ratePerRoom: number;
+  isManualOverride?: boolean;
 }
 
 export interface MealsConfig {
@@ -48,6 +49,7 @@ export interface BookingItem {
   supplierId: string | null;  // linked hotel/transport provider
   notes: string;
   createdAt: string;
+  aeroRef?: string;
 
   // Improved operational fields
   hotelSelectionType?: 'Makkah Only' | 'Madinah Only' | 'Makkah + Madinah' | 'Room Only' | 'Full Umrah Package';
@@ -64,6 +66,16 @@ export interface RoomContract {
   contractRateMYR: number; // Cost rate per room per night
 }
 
+export interface HotelContractHistory {
+  version: number;
+  changeDate: string;
+  rooms: RoomContract[];
+  validFrom: string;
+  validTo: string;
+  authorName: string;
+  authorEmail: string;
+}
+
 export interface HotelContract {
   id: string;
   hotelName: string;
@@ -71,6 +83,8 @@ export interface HotelContract {
   rooms: RoomContract[];
   validFrom: string;
   validTo: string;
+  version?: number;
+  history?: HotelContractHistory[];
 }
 
 export interface InvoiceItem {
@@ -82,7 +96,7 @@ export interface InvoiceItem {
 
 export interface InvoiceItemModel {
   id: string; // e.g. INV-2026-X
-  bookingId: string;
+  bookingId?: string | null;
   customerName: string;
   customerEmail: string;
   items: InvoiceItem[];
@@ -97,6 +111,20 @@ export interface InvoiceItemModel {
   paymentStatus: 'Unpaid' | 'Partial' | 'Paid';
   dueDate: string;
   createdAt: string;
+
+  // Invoice Module Enhancements
+  invoiceType?: 'Booking' | 'Manual' | 'Lump Sum' | 'Proforma';
+  validityPeriod?: string;
+  version?: number;
+  remarks?: string;
+  convertedFromProforma?: boolean;
+  history?: {
+    timestamp: string;
+    action: string;
+    authorName: string;
+    authorEmail: string;
+    changes?: string;
+  }[];
 }
 
 export interface B2BPartner {
@@ -163,3 +191,11 @@ export interface ActivityLog {
 }
 
 export type Language = 'EN' | 'BM';
+
+export interface PricingRule {
+  id: string;
+  hotelName: string; // Specific hotel name or 'All Hotels'
+  roomType: 'Double' | 'Triple' | 'Quad' | 'Quint' | 'Six-sharing';
+  packageType: 'Room only' | 'Full Umrah package';
+  priceMYR: number;
+}

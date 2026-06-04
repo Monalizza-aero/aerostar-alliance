@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+@media print {
+  /* Set orientation to landscape for daily spreadsheets and matrix */
+  @page {
+    size: landscape;
+    margin: 1cm;
+  }
+  
+  /* Hide navigation panels and interactive selectors for a clean report */
+  button, 
+  nav, 
+  input, 
+  select, 
+  .block-print-hide {
+    display: none !important;
+  }
+  
+  .print-allotments-block {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    width: 100% !important;
+  }
+  
+  table {
+    page-break-inside: auto;
+    width: 100% !important;
+  }
+  
+  tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto;
+  }
+}

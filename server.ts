@@ -69,7 +69,20 @@ function saveDatabase(data: any) {
   }
 }
 
-// Core Business Logic: Track rooms availability dynamically
+// Core Business Logic: Track rooms availability dynamically for a given date (defaults to today)
+function getDatesInRange(startStr: string, endStr: string): string[] {
+  const dates: string[] = [];
+  const start = new Date(startStr);
+  const end = new Date(endStr);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return [];
+  const curr = new Date(start);
+  while (curr < end) {
+    dates.push(curr.toISOString().split('T')[0]);
+    curr.setDate(curr.getDate() + 1);
+  }
+  return dates;
+}
+
 function computeLiveInventory(db: any) {
   if (!db.hotelContracts) {
     db.hotelContracts = JSON.parse(JSON.stringify(initialHotelContracts));
@@ -82,29 +95,34 @@ function computeLiveInventory(db: any) {
     });
   });
 
-  // Subtract room allocations of Confirmed bookings
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // For visual convenience, roomsAvailable reflects occupancy for Today
   db.bookings.forEach((booking: any) => {
     if (booking.bookingStatus === 'Confirmed' && booking.roomAllocations) {
-      booking.roomAllocations.forEach((alloc: any) => {
-        if (booking.hotelSelectionType !== 'Madinah Only' && booking.hotelMakkah) {
-          const makkahContract = db.hotelContracts.find((c: any) => c.hotelName === booking.hotelMakkah && c.location === 'Makkah');
-          if (makkahContract) {
-            const room = makkahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
-            if (room) {
-              room.roomsAvailable = Math.max(0, room.roomsAvailable - alloc.count);
+      const coversToday = booking.travelDateFrom <= todayStr && todayStr < booking.travelDateTo;
+      if (coversToday) {
+        booking.roomAllocations.forEach((alloc: any) => {
+          if (booking.hotelSelectionType !== 'Madinah Only' && booking.hotelMakkah) {
+            const makkahContract = db.hotelContracts.find((c: any) => c.hotelName === booking.hotelMakkah && c.location === 'Makkah');
+            if (makkahContract) {
+              const room = makkahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
+              if (room) {
+                room.roomsAvailable = Math.max(0, room.roomsAvailable - alloc.count);
+              }
             }
           }
-        }
-        if (booking.hotelSelectionType !== 'Makkah Only' && booking.hotelMadinah) {
-          const madinahContract = db.hotelContracts.find((c: any) => c.hotelName === booking.hotelMadinah && c.location === 'Madinah');
-          if (madinahContract) {
-            const room = madinahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
-            if (room) {
-              room.roomsAvailable = Math.max(0, room.roomsAvailable - alloc.count);
+          if (booking.hotelSelectionType !== 'Makkah Only' && booking.hotelMadinah) {
+            const madinahContract = db.hotelContracts.find((c: any) => c.hotelName === booking.hotelMadinah && c.location === 'Madinah');
+            if (madinahContract) {
+              const room = madinahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
+              if (room) {
+                room.roomsAvailable = Math.max(0, room.roomsAvailable - alloc.count);
+              }
             }
           }
-        }
-      });
+        });
+      }
     }
   });
 }
@@ -114,59 +132,104 @@ function checkOverbooking(booking: any, db: any, bookingIdToExclude?: string): {
     return { allowed: true };
   }
 
-  // Calculate available inventory EXCLUDING this booking
-  const tempContracts = JSON.parse(JSON.stringify(db.hotelContracts || initialHotelContracts));
-  
-  // Reset all available to total
-  tempContracts.forEach((contract: any) => {
-    contract.rooms.forEach((room: any) => {
-      room.roomsAvailable = room.roomsTotal;
-    });
-  });
+  const travelDates = getDatesInRange(booking.travelDateFrom, booking.travelDateTo);
+  if (travelDates.length === 0) {
+    return { allowed: false, reason: "Invalid travel date range. Ensure Check-In is prior to Check-Out." };
+  }
 
-  db.bookings.forEach((b: any) => {
-    if (b.bookingStatus === 'Confirmed' && b.id !== bookingIdToExclude && b.roomAllocations) {
-      b.roomAllocations.forEach((alloc: any) => {
-        if (b.hotelSelectionType !== 'Madinah Only' && b.hotelMakkah) {
-          const makkahContract = tempContracts.find((c: any) => c.hotelName === b.hotelMakkah && c.location === 'Makkah');
-          if (makkahContract) {
-            const r = makkahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
-            if (r) r.roomsAvailable = Math.max(0, r.roomsAvailable - alloc.count);
-          }
-        }
-        if (b.hotelSelectionType !== 'Makkah Only' && b.hotelMadinah) {
-          const madinahContract = tempContracts.find((c: any) => c.hotelName === b.hotelMadinah && c.location === 'Madinah');
-          if (madinahContract) {
-            const r = madinahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
-            if (r) r.roomsAvailable = Math.max(0, r.roomsAvailable - alloc.count);
-          }
-        }
-      });
-    }
-  });
+  const contracts = db.hotelContracts || initialHotelContracts;
 
-  // Now validate if booking fits
-  for (const alloc of booking.roomAllocations) {
+  // Validate date-by-date
+  for (const d of travelDates) {
+    // 1. Validate Makkah Hotel
     if (booking.hotelSelectionType !== 'Madinah Only' && booking.hotelMakkah) {
-      const makkahContract = tempContracts.find((c: any) => c.hotelName === booking.hotelMakkah && c.location === 'Makkah');
-      if (makkahContract) {
-        const r = makkahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
-        if (r && r.roomsAvailable < alloc.count) {
+      const makkahContract = contracts.find((c: any) => 
+        c.hotelName === booking.hotelMakkah && 
+        c.location === 'Makkah' &&
+        c.validFrom <= d && d <= c.validTo
+      );
+
+      if (!makkahContract) {
+        return { 
+          allowed: false, 
+          reason: `No active hotel contract found in Makkah for "${booking.hotelMakkah}" on ${d}. Booking cannot be confirmed outside contract validity periods.` 
+        };
+      }
+
+      for (const alloc of booking.roomAllocations) {
+        if (alloc.count <= 0) continue;
+        const contractRoom = makkahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
+        if (!contractRoom) {
           return {
             allowed: false,
-            reason: `Makkah Hotel (${booking.hotelMakkah}) has insufficient rooms of type "${alloc.roomType}". Contract has only ${r.roomsAvailable} room(s) available, but booking requests ${alloc.count}.`
+            reason: `Makkah contract for "${booking.hotelMakkah}" does not offer Room Type "${alloc.roomType}"`
+          };
+        }
+
+        const totalRooms = contractRoom.roomsTotal;
+        let occupiedOnDay = 0;
+        db.bookings.forEach((b: any) => {
+          if (b.bookingStatus === 'Confirmed' && b.id !== bookingIdToExclude && b.roomAllocations) {
+            if (b.travelDateFrom <= d && d < b.travelDateTo) {
+              if (b.hotelSelectionType !== 'Madinah Only' && b.hotelMakkah === booking.hotelMakkah) {
+                const bAlloc = b.roomAllocations.find((ra: any) => ra.roomType === alloc.roomType);
+                if (bAlloc) occupiedOnDay += bAlloc.count;
+              }
+            }
+          }
+        });
+
+        if (occupiedOnDay + alloc.count > totalRooms) {
+          return {
+            allowed: false,
+            reason: `Overbooking on ${d} in Makkah (${booking.hotelMakkah}) for "${alloc.roomType}" rooms. Current booked: ${occupiedOnDay}, Contract capacity: ${totalRooms}. Fails by ${occupiedOnDay + alloc.count - totalRooms} room(s).`
           };
         }
       }
     }
+
+    // 2. Validate Madinah Hotel
     if (booking.hotelSelectionType !== 'Makkah Only' && booking.hotelMadinah) {
-      const madinahContract = tempContracts.find((c: any) => c.hotelName === booking.hotelMadinah && c.location === 'Madinah');
-      if (madinahContract) {
-        const r = madinahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
-        if (r && r.roomsAvailable < alloc.count) {
+      const madinahContract = contracts.find((c: any) => 
+        c.hotelName === booking.hotelMadinah && 
+        c.location === 'Madinah' &&
+        c.validFrom <= d && d <= c.validTo
+      );
+
+      if (!madinahContract) {
+        return { 
+          allowed: false, 
+          reason: `No active hotel contract found in Madinah for "${booking.hotelMadinah}" on ${d}. Booking cannot be confirmed outside contract validity periods.` 
+        };
+      }
+
+      for (const alloc of booking.roomAllocations) {
+        if (alloc.count <= 0) continue;
+        const contractRoom = madinahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
+        if (!contractRoom) {
           return {
             allowed: false,
-            reason: `Madinah Hotel (${booking.hotelMadinah}) has insufficient rooms of type "${alloc.roomType}". Contract has only ${r.roomsAvailable} room(s) available, but booking requests ${alloc.count}.`
+            reason: `Madinah contract for "${booking.hotelMadinah}" does not offer Room Type "${alloc.roomType}"`
+          };
+        }
+
+        const totalRooms = contractRoom.roomsTotal;
+        let occupiedOnDay = 0;
+        db.bookings.forEach((b: any) => {
+          if (b.bookingStatus === 'Confirmed' && b.id !== bookingIdToExclude && b.roomAllocations) {
+            if (b.travelDateFrom <= d && d < b.travelDateTo) {
+              if (b.hotelSelectionType !== 'Makkah Only' && b.hotelMadinah === booking.hotelMadinah) {
+                const bAlloc = b.roomAllocations.find((ra: any) => ra.roomType === alloc.roomType);
+                if (bAlloc) occupiedOnDay += bAlloc.count;
+              }
+            }
+          }
+        });
+
+        if (occupiedOnDay + alloc.count > totalRooms) {
+          return {
+            allowed: false,
+            reason: `Overbooking on ${d} in Madinah (${booking.hotelMadinah}) for "${alloc.roomType}" rooms. Current booked: ${occupiedOnDay}, Contract capacity: ${totalRooms}. Fails by ${occupiedOnDay + alloc.count - totalRooms} room(s).`
           };
         }
       }
@@ -310,6 +373,22 @@ function syncBookingInvoice(booking: BookingItem, db: any, authorEmail: string, 
 
   if (invoice) {
     // Update existing invoice
+    const oldTotal = invoice.grandTotal;
+    const versionBefore = invoice.version || 1;
+    let nextVersion = versionBefore;
+    const previousHistory = invoice.history || [];
+
+    if (Math.round(oldTotal) !== Math.round(grandTotal)) {
+      nextVersion += 1;
+      previousHistory.push({
+        timestamp: new Date().toISOString(),
+        action: `Sync update to v${nextVersion}`,
+        authorName: authorName || "System Sync",
+        authorEmail: authorEmail || "system@aero-star.co",
+        changes: `Booking adjustment auto-trigger: adjusted from ${invoice.currency} ${Math.round(oldTotal)} to ${invoice.currency} ${Math.round(grandTotal)}`
+      });
+    }
+
     invoice.customerName = booking.customerName;
     invoice.customerEmail = booking.customerEmail;
     invoice.items = itemsList;
@@ -319,6 +398,9 @@ function syncBookingInvoice(booking: BookingItem, db: any, authorEmail: string, 
     invoice.taxPercentage = taxPercentage;
     invoice.taxAmount = taxAmount;
     invoice.grandTotal = grandTotal;
+    invoice.invoiceType = invoice.invoiceType || "Booking";
+    invoice.version = nextVersion;
+    invoice.history = previousHistory;
     
     // Create Log
     db.logs.push({
@@ -349,7 +431,16 @@ function syncBookingInvoice(booking: BookingItem, db: any, authorEmail: string, 
       paidAmount: 0,
       paymentStatus: "Unpaid",
       dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split("T")[0], // 14 days credit
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      invoiceType: "Booking",
+      version: 1,
+      history: [{
+        timestamp: new Date().toISOString(),
+        action: "Auto-Created",
+        authorName: authorName || "System Sync",
+        authorEmail: authorEmail || "system@aero-star.co",
+        changes: `Auto-generated booking-based invoice of ${booking.currency} ${grandTotal}`
+      }]
     };
     db.invoices.push(newInvoice);
 
@@ -563,6 +654,240 @@ app.put("/api/invoices/:id/payment", (req, res) => {
   res.json({ success: true, invoice, db });
 });
 
+// 6a. Create Invoice (Manual / Lump Sum / Proforma)
+app.post("/api/invoices", (req, res) => {
+  const db = getDatabase();
+  const { invoice, authorEmail, authorName } = req.body;
+
+  if (!invoice) {
+    return res.status(400).json({ error: "Missing invoice data" });
+  }
+
+  const index = db.invoices.length + 1001;
+  const year = new Date().getFullYear();
+  let prefix = "INV";
+  if (invoice.invoiceType === "Proforma") prefix = "PRO";
+  else if (invoice.invoiceType === "Lump Sum") prefix = "LMP";
+  else if (invoice.invoiceType === "Manual") prefix = "MAN";
+  
+  const id = `${prefix}-${year}-${index}`;
+  const rate = EXCHANGE_RATES[invoice.currency as keyof typeof EXCHANGE_RATES] || 1.0;
+
+  const newInvoice: InvoiceItemModel = {
+    ...invoice,
+    id,
+    exchangeRateToMYR: rate,
+    version: 1,
+    history: [{
+      timestamp: new Date().toISOString(),
+      action: "Created Invoice",
+      authorName: authorName || "Ops Desk",
+      authorEmail: authorEmail || "operations@aerostar.co",
+      changes: `Invoice registered as ${invoice.invoiceType || 'Manual'} invoice with amount ${invoice.grandTotal}`
+    }],
+    createdAt: new Date().toISOString()
+  };
+
+  db.invoices.push(newInvoice);
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "operations@aerostar.co",
+    userName: authorName || "Ops Desk",
+    userRole: "Finance",
+    action: `Created new ${invoice.invoiceType || 'Manual'} Invoice ${id} for ${invoice.customerName} (${invoice.currency} ${invoice.grandTotal}).`,
+    category: "Invoice",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, invoice: newInvoice, db });
+});
+
+// 6b. Edit/Adjust Invoice (Only allowed before full payment)
+app.put("/api/invoices/:id", (req, res) => {
+  const db = getDatabase();
+  const { id } = req.params;
+  const { invoice: updatedData, authorEmail, authorName } = req.body;
+
+  const invoice = db.invoices.find((inv: any) => inv.id === id);
+  if (!invoice) {
+    return res.status(404).json({ error: "Invoice not found" });
+  }
+
+  if (invoice.paymentStatus === "Paid") {
+    return res.status(400).json({ error: "Cannot edit fully paid invoices." });
+  }
+
+  const oldTotal = invoice.grandTotal;
+  const previousVersion = invoice.version || 1;
+  const newVersion = previousVersion + 1;
+
+  // Track changed items text description
+  const changesText = `Adjusted grand total from ${invoice.currency} ${oldTotal} to ${updatedData.currency} ${updatedData.grandTotal}.`;
+
+  const newHistoryEntry = {
+    timestamp: new Date().toISOString(),
+    action: `Updated parameters to v${newVersion}`,
+    authorName: authorName || "Ops Desk",
+    authorEmail: authorEmail || "operations@aerostar.co",
+    changes: changesText
+  };
+
+  const previousHistory = invoice.history || [];
+  
+  let updatedPaymentStatus = invoice.paymentStatus;
+  const paid = invoice.paidAmount || 0;
+  if (paid >= updatedData.grandTotal) {
+    updatedPaymentStatus = "Paid";
+  } else if (paid > 0 && paid < updatedData.grandTotal) {
+    updatedPaymentStatus = "Partial";
+  } else {
+    updatedPaymentStatus = "Unpaid";
+  }
+
+  Object.assign(invoice, {
+    customerName: updatedData.customerName,
+    customerEmail: updatedData.customerEmail,
+    items: updatedData.items || [],
+    currency: updatedData.currency,
+    exchangeRateToMYR: EXCHANGE_RATES[updatedData.currency as keyof typeof EXCHANGE_RATES] || 1.0,
+    subtotal: updatedData.subtotal,
+    taxPercentage: updatedData.taxPercentage,
+    taxAmount: updatedData.taxAmount,
+    discountAmount: updatedData.discountAmount,
+    grandTotal: updatedData.grandTotal,
+    paymentStatus: updatedPaymentStatus,
+    dueDate: updatedData.dueDate || invoice.dueDate,
+    remarks: updatedData.remarks || invoice.remarks,
+    validityPeriod: updatedData.validityPeriod || invoice.validityPeriod,
+    invoiceType: updatedData.invoiceType || invoice.invoiceType,
+    bookingId: updatedData.bookingId !== undefined ? updatedData.bookingId : invoice.bookingId,
+    version: newVersion,
+    history: [...previousHistory, newHistoryEntry]
+  });
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "operations@aerostar.co",
+    userName: authorName || "Ops Desk",
+    userRole: "Finance",
+    action: `Updated Invoice ${id} structure to Version ${newVersion}: ${changesText}.`,
+    category: "Invoice",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, invoice, db });
+});
+
+// 6c. Convert Proforma Invoice to Standard Active Invoice
+app.post("/api/invoices/:id/convert", (req, res) => {
+  const db = getDatabase();
+  const { id } = req.params;
+  const { authorEmail, authorName, targetType } = req.body; // targetType: Booking / Manual
+
+  const invoice = db.invoices.find((inv: any) => inv.id === id);
+  if (!invoice) {
+    return res.status(404).json({ error: "Invoice not found" });
+  }
+
+  if (invoice.invoiceType !== "Proforma") {
+    return res.status(400).json({ error: "Only proforma invoices can be converted." });
+  }
+
+  invoice.invoiceType = targetType || "Manual";
+  invoice.convertedFromProforma = true;
+  invoice.history = invoice.history || [];
+  invoice.history.push({
+    timestamp: new Date().toISOString(),
+    action: "Converted Proforma",
+    authorName: authorName || "Ops Desk",
+    authorEmail: authorEmail || "operations@aerostar.co",
+    changes: `Converted from Proforma to active ${invoice.invoiceType} invoice successfully.`
+  });
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "operations@aerostar.co",
+    userName: authorName || "Ops Desk",
+    userRole: "Finance",
+    action: `Converted Proforma Invoice ${id} to fully active ${invoice.invoiceType} Invoice.`,
+    category: "Invoice",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, invoice, db });
+});
+
+// 6d. Import Invoices bulk
+app.post("/api/invoices/import", (req, res) => {
+  const db = getDatabase();
+  const { invoices: importList, authorEmail, authorName } = req.body;
+
+  if (!Array.isArray(importList)) {
+    return res.status(400).json({ error: "Import data must be an array of invoices" });
+  }
+
+  let importedCount = 0;
+  importList.forEach(invoice => {
+    const index = db.invoices.length + 1001;
+    const year = new Date().getFullYear();
+    let prefix = "INV";
+    if (invoice.invoiceType === "Proforma") prefix = "PRO";
+    else if (invoice.invoiceType === "Lump Sum") prefix = "LMP";
+    else if (invoice.invoiceType === "Manual") prefix = "MAN";
+    
+    const id = `${prefix}-${year}-${index}`;
+    const rate = EXCHANGE_RATES[invoice.currency as keyof typeof EXCHANGE_RATES] || 1.0;
+
+    const newInvoice: InvoiceItemModel = {
+      id,
+      bookingId: invoice.bookingId || null,
+      customerName: invoice.customerName,
+      customerEmail: invoice.customerEmail || "client@import.co",
+      items: invoice.items || [{ description: invoice.description || "Imported Package Services", unitPrice: invoice.grandTotal, quantity: 1, subtotal: invoice.grandTotal }],
+      currency: invoice.currency || "MYR",
+      exchangeRateToMYR: rate,
+      subtotal: invoice.subtotal || invoice.grandTotal,
+      taxPercentage: invoice.taxPercentage || 0,
+      taxAmount: invoice.taxAmount || 0,
+      discountAmount: invoice.discountAmount || 0,
+      grandTotal: invoice.grandTotal,
+      paidAmount: invoice.paidAmount || 0,
+      paymentStatus: invoice.paymentStatus || "Unpaid",
+      dueDate: invoice.dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+      createdAt: new Date().toISOString(),
+      invoiceType: invoice.invoiceType || "Manual",
+      version: 1,
+      history: [{
+        timestamp: new Date().toISOString(),
+        action: "Bulk Imported",
+        authorName: authorName || "Ops Desk",
+        authorEmail: authorEmail || "operations@aerostar.co",
+        changes: `Bulk Imported via operations desk.`
+      }]
+    };
+
+    db.invoices.push(newInvoice);
+    importedCount++;
+  });
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "operations@aerostar.co",
+    userName: authorName || "Ops Desk",
+    userRole: "Finance",
+    action: `Bulk Imported ${importedCount} Invoices successfully into system files.`,
+    category: "Invoice",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, count: importedCount, db });
+});
+
 // 7. Manage B2B Partner Operators
 app.post("/api/partners", (req, res) => {
   const db = getDatabase();
@@ -660,6 +985,155 @@ app.post("/api/suppliers/:id/pay", (req, res) => {
 
   saveDatabase(db);
   res.json({ success: true, supplier, db });
+});
+
+// 9b. Manage Hotel Contracts CRUD & Snapshot Version Control
+app.post("/api/hotel-contracts", (req, res) => {
+  const db = getDatabase();
+  const { contract, authorEmail, authorName } = req.body;
+
+  if (!contract) {
+    return res.status(400).json({ error: "Missing contract data." });
+  }
+
+  const newContract = {
+    ...contract,
+    id: contract.id || `CON-${Date.now().toString().slice(-4)}`,
+    version: 1,
+    history: [{
+      version: 1,
+      changeDate: new Date().toISOString().split('T')[0],
+      rooms: JSON.parse(JSON.stringify(contract.rooms || [])),
+      validFrom: contract.validFrom,
+      validTo: contract.validTo,
+      authorEmail: authorEmail || "operations@aerostar.co",
+      authorName: authorName || "Ops Desk"
+    }]
+  };
+
+  if (!db.hotelContracts) {
+    db.hotelContracts = [];
+  }
+
+  db.hotelContracts.push(newContract);
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "operations@aerostar.co",
+    userName: authorName || "Ops Desk",
+    userRole: "Admin",
+    action: `Registered Hotel Contract: ${newContract.hotelName} (${newContract.location}) - ID: ${newContract.id} [v1]`,
+    category: "Supplier",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, contract: newContract, db });
+});
+
+app.put("/api/hotel-contracts/:id", (req, res) => {
+  const db = getDatabase();
+  const contractId = req.params.id;
+  const { contract, authorEmail, authorName } = req.body;
+
+  if (!db.hotelContracts) {
+    db.hotelContracts = [];
+  }
+
+  const idx = db.hotelContracts.findIndex((c: any) => c.id === contractId);
+  if (idx === -1) {
+    return res.status(404).json({ error: "Hotel Contract not found." });
+  }
+
+  const oldContract = db.hotelContracts[idx];
+  const nextVersion = (oldContract.version || 1) + 1;
+
+  const historyEntry = {
+    version: nextVersion,
+    changeDate: new Date().toISOString().split('T')[0],
+    rooms: JSON.parse(JSON.stringify(contract.rooms || [])),
+    validFrom: contract.validFrom,
+    validTo: contract.validTo,
+    authorEmail: authorEmail || "operations@aerostar.co",
+    authorName: authorName || "Ops Desk"
+  };
+
+  const updatedContract = {
+    ...oldContract,
+    ...contract,
+    version: nextVersion,
+    history: [...(oldContract.history || []), historyEntry]
+  };
+
+  db.hotelContracts[idx] = updatedContract;
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "operations@aerostar.co",
+    userName: authorName || "Ops Desk",
+    userRole: "Admin",
+    action: `Modified Hotel Contract: ${updatedContract.hotelName} [ID: ${contractId}]. Incremented to version [v${nextVersion}].`,
+    category: "Supplier",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, contract: updatedContract, db });
+});
+
+app.delete("/api/hotel-contracts/:id", (req, res) => {
+  const db = getDatabase();
+  const contractId = req.params.id;
+  const { authorEmail, authorName } = req.body || {};
+
+  if (!db.hotelContracts) {
+    db.hotelContracts = [];
+  }
+
+  const contract = db.hotelContracts.find((c: any) => c.id === contractId);
+  if (!contract) {
+    return res.status(404).json({ error: "Contract not found." });
+  }
+
+  db.hotelContracts = db.hotelContracts.filter((c: any) => c.id !== contractId);
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "operations@aerostar.co",
+    userName: authorName || "Ops Desk",
+    userRole: "Admin",
+    action: `Archived/Removed Hotel Contract: ${contract.hotelName} [ID: ${contractId}] permanently.`,
+    category: "Supplier",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, db });
+});
+
+// 9c. Dynamic Pricing Rules Matrix
+app.post("/api/pricing-rules", (req, res) => {
+  const db = getDatabase();
+  const { pricingRules, authorEmail, authorName } = req.body;
+
+  if (!pricingRules) {
+    return res.status(400).json({ error: "Missing pricingRules data." });
+  }
+
+  db.pricingRules = pricingRules;
+
+  db.logs.push({
+    id: `LOG-${Date.now()}`,
+    userEmail: authorEmail || "finance@aero-star.co",
+    userName: authorName || "Ahmad Farhan",
+    userRole: "Finance",
+    action: `Synchronized global Dynamic Pricing rules matrix (Active Rules: ${pricingRules.length}).`,
+    category: "System",
+    timestamp: new Date().toISOString()
+  });
+
+  saveDatabase(db);
+  res.json({ success: true, pricingRules: db.pricingRules, db });
 });
 
 // 10. HR Employees Management - Add new employees
