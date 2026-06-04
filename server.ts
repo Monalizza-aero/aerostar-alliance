@@ -10,9 +10,10 @@ import {
   initialTransactions, 
   initialEmployees, 
   initialLogs,
-  EXCHANGE_RATES
+  EXCHANGE_RATES,
+  initialHotelContracts
 } from "./src/db_initial.js";
-import { BookingItem, InvoiceItemModel, ActivityLog, FinanceTransaction } from "./src/types.js";
+import { BookingItem, InvoiceItemModel, ActivityLog, FinanceTransaction, HotelContract, RoomAllocation, MealsConfig, AdditionalService } from "./src/types.js";
 
 const app = express();
 const PORT = 3000;
@@ -31,14 +32,20 @@ function getDatabase() {
       suppliers: initialSuppliers,
       transactions: initialTransactions,
       employees: initialEmployees,
-      logs: initialLogs
+      logs: initialLogs,
+      hotelContracts: initialHotelContracts
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(defaultData, null, 2), "utf8");
     return defaultData;
   }
   try {
     const data = fs.readFileSync(DB_FILE, "utf8");
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (!parsed.hotelContracts) {
+      parsed.hotelContracts = initialHotelContracts;
+      fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), "utf8");
+    }
+    return parsed;
   } catch (err) {
     console.error("Error reading database file, returning default data:", err);
     return {
@@ -48,7 +55,8 @@ function getDatabase() {
       suppliers: initialSuppliers,
       transactions: initialTransactions,
       employees: initialEmployees,
-      logs: initialLogs
+      logs: initialLogs,
+      hotelContracts: initialHotelContracts
     };
   }
 }
@@ -61,10 +69,119 @@ function saveDatabase(data: any) {
   }
 }
 
+// Core Business Logic: Track rooms availability dynamically
+function computeLiveInventory(db: any) {
+  if (!db.hotelContracts) {
+    db.hotelContracts = JSON.parse(JSON.stringify(initialHotelContracts));
+  }
+  
+  // Reset all roomsAvailable to roomsTotal
+  db.hotelContracts.forEach((contract: any) => {
+    contract.rooms.forEach((room: any) => {
+      room.roomsAvailable = room.roomsTotal;
+    });
+  });
+
+  // Subtract room allocations of Confirmed bookings
+  db.bookings.forEach((booking: any) => {
+    if (booking.bookingStatus === 'Confirmed' && booking.roomAllocations) {
+      booking.roomAllocations.forEach((alloc: any) => {
+        if (booking.hotelSelectionType !== 'Madinah Only' && booking.hotelMakkah) {
+          const makkahContract = db.hotelContracts.find((c: any) => c.hotelName === booking.hotelMakkah && c.location === 'Makkah');
+          if (makkahContract) {
+            const room = makkahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
+            if (room) {
+              room.roomsAvailable = Math.max(0, room.roomsAvailable - alloc.count);
+            }
+          }
+        }
+        if (booking.hotelSelectionType !== 'Makkah Only' && booking.hotelMadinah) {
+          const madinahContract = db.hotelContracts.find((c: any) => c.hotelName === booking.hotelMadinah && c.location === 'Madinah');
+          if (madinahContract) {
+            const room = madinahContract.rooms.find((r: any) => r.roomType === alloc.roomType);
+            if (room) {
+              room.roomsAvailable = Math.max(0, room.roomsAvailable - alloc.count);
+            }
+          }
+        }
+      });
+    }
+  });
+}
+
+function checkOverbooking(booking: any, db: any, bookingIdToExclude?: string): { allowed: boolean; reason?: string } {
+  if (booking.bookingStatus !== 'Confirmed' || !booking.roomAllocations || booking.roomAllocations.length === 0) {
+    return { allowed: true };
+  }
+
+  // Calculate available inventory EXCLUDING this booking
+  const tempContracts = JSON.parse(JSON.stringify(db.hotelContracts || initialHotelContracts));
+  
+  // Reset all available to total
+  tempContracts.forEach((contract: any) => {
+    contract.rooms.forEach((room: any) => {
+      room.roomsAvailable = room.roomsTotal;
+    });
+  });
+
+  db.bookings.forEach((b: any) => {
+    if (b.bookingStatus === 'Confirmed' && b.id !== bookingIdToExclude && b.roomAllocations) {
+      b.roomAllocations.forEach((alloc: any) => {
+        if (b.hotelSelectionType !== 'Madinah Only' && b.hotelMakkah) {
+          const makkahContract = tempContracts.find((c: any) => c.hotelName === b.hotelMakkah && c.location === 'Makkah');
+          if (makkahContract) {
+            const r = makkahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
+            if (r) r.roomsAvailable = Math.max(0, r.roomsAvailable - alloc.count);
+          }
+        }
+        if (b.hotelSelectionType !== 'Makkah Only' && b.hotelMadinah) {
+          const madinahContract = tempContracts.find((c: any) => c.hotelName === b.hotelMadinah && c.location === 'Madinah');
+          if (madinahContract) {
+            const r = madinahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
+            if (r) r.roomsAvailable = Math.max(0, r.roomsAvailable - alloc.count);
+          }
+        }
+      });
+    }
+  });
+
+  // Now validate if booking fits
+  for (const alloc of booking.roomAllocations) {
+    if (booking.hotelSelectionType !== 'Madinah Only' && booking.hotelMakkah) {
+      const makkahContract = tempContracts.find((c: any) => c.hotelName === booking.hotelMakkah && c.location === 'Makkah');
+      if (makkahContract) {
+        const r = makkahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
+        if (r && r.roomsAvailable < alloc.count) {
+          return {
+            allowed: false,
+            reason: `Makkah Hotel (${booking.hotelMakkah}) has insufficient rooms of type "${alloc.roomType}". Contract has only ${r.roomsAvailable} room(s) available, but booking requests ${alloc.count}.`
+          };
+        }
+      }
+    }
+    if (booking.hotelSelectionType !== 'Makkah Only' && booking.hotelMadinah) {
+      const madinahContract = tempContracts.find((c: any) => c.hotelName === booking.hotelMadinah && c.location === 'Madinah');
+      if (madinahContract) {
+        const r = madinahContract.rooms.find((rm: any) => rm.roomType === alloc.roomType);
+        if (r && r.roomsAvailable < alloc.count) {
+          return {
+            allowed: false,
+            reason: `Madinah Hotel (${booking.hotelMadinah}) has insufficient rooms of type "${alloc.roomType}". Contract has only ${r.roomsAvailable} room(s) available, but booking requests ${alloc.count}.`
+          };
+        }
+      }
+    }
+  }
+
+  return { allowed: true };
+}
+
 // REST APIs
 // 1. Get entire db state
 app.get("/api/db", (req, res) => {
-  res.json(getDatabase());
+  const db = getDatabase();
+  computeLiveInventory(db);
+  res.json(db);
 });
 
 // 2. Reset database state
@@ -76,6 +193,7 @@ app.post("/api/db/reset", (req, res) => {
     suppliers: initialSuppliers,
     transactions: initialTransactions,
     employees: initialEmployees,
+    hotelContracts: initialHotelContracts,
     logs: [
       {
         id: `LOG-${Date.now()}`,
@@ -110,26 +228,79 @@ function syncBookingInvoice(booking: BookingItem, db: any, authorEmail: string, 
 
   // Check if invoice exists
   let invoice = db.invoices.find((inv: any) => inv.bookingId === booking.id);
-  const rate = EXCHANGE_RATES[booking.currency] || 1.0;
+  const rate = EXCHANGE_RATES[booking.currency as keyof typeof EXCHANGE_RATES] || 1.0;
 
   // Build itemized breakdown
-  const packageItem = {
-    description: `${booking.packageName} (${booking.paxCount} Pax) - ${booking.bookingType}`,
-    unitPrice: Math.round(booking.totalAmount / booking.paxCount),
-    quantity: booking.paxCount,
-    subtotal: booking.totalAmount
-  };
+  const itemsList: any[] = [];
+  
+  if (booking.roomAllocations && booking.roomAllocations.length > 0) {
+    const nights = Math.max(1, Math.round((new Date(booking.travelDateTo).getTime() - new Date(booking.travelDateFrom).getTime()) / (1000 * 60 * 60 * 24)));
+    booking.roomAllocations.forEach(alloc => {
+      if (alloc.count > 0) {
+        // Contract rate is in MYR, so convert to booking currency
+        const unitPriceInCurrency = Math.round(alloc.ratePerRoom / rate);
+        const sub = alloc.count * unitPriceInCurrency * nights;
+        
+        let destinationHotel = "";
+        if (booking.hotelSelectionType === "Makkah Only") {
+          destinationHotel = booking.hotelMakkah;
+        } else if (booking.hotelSelectionType === "Madinah Only") {
+          destinationHotel = booking.hotelMadinah;
+        } else {
+          destinationHotel = `${booking.hotelMakkah} & ${booking.hotelMadinah}`;
+        }
 
-  const itemsList = [packageItem];
-  if (booking.extraServices && booking.extraServices.length > 0) {
-    booking.extraServices.forEach(srv => {
+        itemsList.push({
+          description: `Lodging: ${alloc.roomType} Room (Capacity: ${alloc.capacity}pax) at ${destinationHotel || "Selected Hotels"} - ${alloc.count} room(s) x ${nights} night(s)`,
+          unitPrice: unitPriceInCurrency,
+          quantity: alloc.count,
+          subtotal: sub
+        });
+      }
+    });
+  }
+
+  // Add Meal Plans
+  if (booking.mealsConfig && booking.mealsConfig.totalCost > 0) {
+    itemsList.push({
+      description: `Meal Package: ${booking.mealsConfig.customPackageName || "Default Board Catering"}`,
+      unitPrice: booking.mealsConfig.totalCost,
+      quantity: 1,
+      subtotal: booking.mealsConfig.totalCost
+    });
+  }
+
+  // Add custom services
+  if (booking.customServices && booking.customServices.length > 0) {
+    booking.customServices.forEach(srv => {
       itemsList.push({
-        description: `Service Add-on: ${srv}`,
-        unitPrice: 0, // bundled in package total
+        description: `Additional Service: ${srv.name}${srv.notes ? ' (' + srv.notes + ')' : ''}`,
+        unitPrice: srv.cost,
         quantity: 1,
-        subtotal: 0
+        subtotal: srv.cost
       });
     });
+  }
+
+  // Fallback for pre-seed bookings (which have empty allocations but non-zero totalAmount)
+  if (itemsList.length === 0) {
+    itemsList.push({
+      description: `${booking.packageName} (${booking.paxCount} Pax) - ${booking.bookingType}`,
+      unitPrice: Math.round(booking.totalAmount / booking.paxCount),
+      quantity: booking.paxCount,
+      subtotal: booking.totalAmount
+    });
+    
+    if (booking.extraServices && booking.extraServices.length > 0) {
+      booking.extraServices.forEach(srv => {
+        itemsList.push({
+          description: `Service Add-on: ${srv}`,
+          unitPrice: 0,
+          quantity: 1,
+          subtotal: 0
+        });
+      });
+    }
   }
 
   const subtotal = booking.totalAmount;
@@ -217,7 +388,13 @@ app.post("/api/bookings", (req, res) => {
     return res.status(400).json({ error: "Missing booking data" });
   }
 
-  const rate = EXCHANGE_RATES[booking.currency] || 1.0;
+  // Pre-validate overbooking limits
+  const validation = checkOverbooking(booking, db);
+  if (!validation.allowed) {
+    return res.status(400).json({ error: validation.reason });
+  }
+
+  const rate = EXCHANGE_RATES[booking.currency as keyof typeof EXCHANGE_RATES] || 1.0;
   const newBooking: BookingItem = {
     ...booking,
     id: `BK-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 90 + 10)}`,
@@ -229,6 +406,9 @@ app.post("/api/bookings", (req, res) => {
 
   // Sync / Auto generate Invoice if Confirmed
   syncBookingInvoice(newBooking, db, authorEmail, authorName);
+
+  // Recalculate live hotel capacities
+  computeLiveInventory(db);
 
   // Write systemic audit log
   db.logs.push({
@@ -256,7 +436,13 @@ app.put("/api/bookings/:id", (req, res) => {
     return res.status(404).json({ error: "Booking not found" });
   }
 
-  const rate = EXCHANGE_RATES[booking.currency] || 1.0;
+  // Pre-validate overbooking limits, ignoring these current room allocations
+  const validation = checkOverbooking(booking, db, bookingId);
+  if (!validation.allowed) {
+    return res.status(400).json({ error: validation.reason });
+  }
+
+  const rate = EXCHANGE_RATES[booking.currency as keyof typeof EXCHANGE_RATES] || 1.0;
   const oldStatus = db.bookings[idx].bookingStatus;
 
   const updatedBooking: BookingItem = {
@@ -277,6 +463,9 @@ app.put("/api/bookings/:id", (req, res) => {
       linkedInvoice.paymentStatus = "Unpaid"; // cancel actions reset payment or flag
     }
   }
+
+  // Recalculate live hotel capacities
+  computeLiveInventory(db);
 
   db.logs.push({
     id: `LOG-${Date.now()}`,
@@ -306,6 +495,9 @@ app.delete("/api/bookings/:id", (req, res) => {
   // Remove booking and any linked invoices
   db.bookings = db.bookings.filter((b: any) => b.id !== bookingId);
   db.invoices = db.invoices.filter((inv: any) => inv.bookingId !== bookingId);
+
+  // Recalculate live capacities
+  computeLiveInventory(db);
 
   db.logs.push({
     id: `LOG-${Date.now()}`,

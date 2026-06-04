@@ -1,4 +1,4 @@
-import { BookingItem, InvoiceItemModel, B2BPartner, Supplier, FinanceTransaction, Employee, ActivityLog } from './types';
+import { BookingItem, InvoiceItemModel, B2BPartner, Supplier, FinanceTransaction, Employee, ActivityLog, HotelContract } from './types';
 
 export const EXCHANGE_RATES = {
   MYR: 1.0,
@@ -392,5 +392,64 @@ export const initialLogs: ActivityLog[] = [
     action: 'Invoice INV-2026-1001 marked as fully PAID.',
     category: 'Invoice',
     timestamp: '2026-06-04T02:30:00Z'
+  }
+];
+
+export const initialHotelContracts: HotelContract[] = [
+  {
+    id: 'CON-MAK-001',
+    hotelName: 'Pullman Zamzam Makkah',
+    location: 'Makkah',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    rooms: [
+      { roomType: 'Double', capacity: 2, roomsAvailable: 15, roomsTotal: 15, contractRateMYR: 450 },
+      { roomType: 'Triple', capacity: 3, roomsAvailable: 10, roomsTotal: 10, contractRateMYR: 550 },
+      { roomType: 'Quad', capacity: 4, roomsAvailable: 15, roomsTotal: 15, contractRateMYR: 650 },
+      { roomType: 'Quint', capacity: 5, roomsAvailable: 5, roomsTotal: 5, contractRateMYR: 750 },
+      { roomType: 'Six-sharing', capacity: 6, roomsAvailable: 5, roomsTotal: 5, contractRateMYR: 850 }
+    ]
+  },
+  {
+    id: 'CON-MAK-002',
+    hotelName: 'Swissôtel Makkah',
+    location: 'Makkah',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    rooms: [
+      { roomType: 'Double', capacity: 2, roomsAvailable: 25, roomsTotal: 25, contractRateMYR: 480 },
+      { roomType: 'Triple', capacity: 3, roomsAvailable: 20, roomsTotal: 20, contractRateMYR: 580 },
+      { roomType: 'Quad', capacity: 4, roomsAvailable: 25, roomsTotal: 25, contractRateMYR: 680 },
+      { roomType: 'Quint', capacity: 5, roomsAvailable: 10, roomsTotal: 10, contractRateMYR: 780 },
+      { roomType: 'Six-sharing', capacity: 6, roomsAvailable: 10, roomsTotal: 10, contractRateMYR: 880 }
+    ]
+  },
+  {
+    id: 'CON-MAD-001',
+    hotelName: 'Anwar Al Madinah Mövenpick',
+    location: 'Madinah',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    rooms: [
+      { roomType: 'Double', capacity: 2, roomsAvailable: 20, roomsTotal: 20, contractRateMYR: 350 },
+      { roomType: 'Triple', capacity: 3, roomsAvailable: 15, roomsTotal: 15, contractRateMYR: 450 },
+      { roomType: 'Quad', capacity: 4, roomsAvailable: 20, roomsTotal: 20, contractRateMYR: 550 },
+      { roomType: 'Quint', capacity: 5, roomsAvailable: 8, roomsTotal: 8, contractRateMYR: 650 },
+      { roomType: 'Six-sharing', capacity: 6, roomsAvailable: 8, roomsTotal: 8, contractRateMYR: 750 }
+    ]
+  },
+  {
+    id: 'CON-MAD-002',
+    hotelName: 'The Oberoi Madinah',
+    location: 'Madinah',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    rooms: [
+      { roomType: 'Double', capacity: 2, roomsAvailable: 10, roomsTotal: 10, contractRateMYR: 750 },
+      { roomType: 'Triple', capacity: 3, roomsAvailable: 8, roomsTotal: 8, contractRateMYR: 900 },
+      { roomType: 'Quad', capacity: 4, roomsAvailable: 10, roomsTotal: 10, contractRateMYR: 1100 },
+      { roomType: 'Quint', capacity: 5, roomsAvailable: 5, roomsTotal: 5, contractRateMYR: 1300 },
+      { roomType: 'Six-sharing', capacity: 6, roomsAvailable: 5, roomsTotal: 5, contractRateMYR: 1500 }
+    ]
   }
 ];

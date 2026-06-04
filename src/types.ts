@@ -1,5 +1,29 @@
 export type UserRole = 'Admin' | 'Finance' | 'Sales' | 'Agent' | 'Staff';
 
+export interface RoomAllocation {
+  roomType: 'Double' | 'Triple' | 'Quad' | 'Quint' | 'Six-sharing';
+  count: number;
+  capacity: number;
+  ratePerRoom: number;
+}
+
+export interface MealsConfig {
+  breakfast: boolean;
+  lunch: boolean;
+  dinner: boolean;
+  overrideCount?: number; // total meals manual override count
+  customPackageName: string;
+  pricePerMeal: number;
+  totalCost: number;
+}
+
+export interface AdditionalService {
+  name: string;
+  cost: number;
+  notes?: string;
+  isPredefined?: boolean;
+}
+
 export interface BookingItem {
   id: string;
   customerName: string;
@@ -24,6 +48,29 @@ export interface BookingItem {
   supplierId: string | null;  // linked hotel/transport provider
   notes: string;
   createdAt: string;
+
+  // Improved operational fields
+  hotelSelectionType?: 'Makkah Only' | 'Madinah Only' | 'Makkah + Madinah' | 'Room Only' | 'Full Umrah Package';
+  roomAllocations?: RoomAllocation[];
+  mealsConfig?: MealsConfig;
+  customServices?: AdditionalService[];
+}
+
+export interface RoomContract {
+  roomType: 'Double' | 'Triple' | 'Quad' | 'Quint' | 'Six-sharing';
+  capacity: number;
+  roomsAvailable: number; // calculated dynamically or stored
+  roomsTotal: number;
+  contractRateMYR: number; // Cost rate per room per night
+}
+
+export interface HotelContract {
+  id: string;
+  hotelName: string;
+  location: 'Makkah' | 'Madinah';
+  rooms: RoomContract[];
+  validFrom: string;
+  validTo: string;
 }
 
 export interface InvoiceItem {

@@ -29,7 +29,8 @@ import {
   FinanceTransaction, 
   Employee, 
   ActivityLog, 
-  Language 
+  Language,
+  HotelContract
 } from './types';
 
 import { TRANSLATIONS } from './Translations';
@@ -60,6 +61,7 @@ export default function App() {
     transactions: FinanceTransaction[];
     employees: Employee[];
     logs: ActivityLog[];
+    hotelContracts?: HotelContract[];
   }>({
     bookings: [],
     invoices: [],
@@ -67,7 +69,8 @@ export default function App() {
     suppliers: [],
     transactions: [],
     employees: [],
-    logs: []
+    logs: [],
+    hotelContracts: []
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -672,6 +675,7 @@ export default function App() {
                 bookings={db.bookings}
                 partners={db.partners}
                 suppliers={db.suppliers}
+                hotelContracts={db.hotelContracts || []}
                 lang={lang}
                 onSaveBooking={handleSaveBooking}
                 onDeleteBooking={handleDeleteBooking}
