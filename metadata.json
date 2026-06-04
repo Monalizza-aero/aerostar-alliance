@@ -1,0 +1,6 @@
+{
+  "name": "Aerostar Alliance",
+  "description": "Enterprise Hajj & Umrah Portal handling automated invoicing, dual-language operations, B2B partner commissions, and multi-currency accounting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
