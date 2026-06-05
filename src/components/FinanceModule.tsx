@@ -19,14 +19,17 @@ interface FinanceModuleProps {
   transactions: FinanceTransaction[];
   lang: Language;
   onAddTransaction: (txn: Partial<FinanceTransaction>) => Promise<void>;
+  exchangeRates?: Record<string, number>;
 }
 
 export default function FinanceModule({
   transactions,
   lang,
-  onAddTransaction
+  onAddTransaction,
+  exchangeRates
 }: FinanceModuleProps) {
   const t = (key: string) => TRANSLATIONS[lang][key] || key;
+  const ACTIVE_RATES = exchangeRates || EXCHANGE_RATES;
 
   // Search/Filters
   const [search, setSearch] = useState('');
@@ -162,15 +165,15 @@ export default function FinanceModule({
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-slate-600">
             <div className="flex justify-between">
               <span>1 SGD =</span>
-              <span className="font-bold text-slate-900">MYR {EXCHANGE_RATES.SGD}</span>
+              <span className="font-bold text-slate-900">MYR {ACTIVE_RATES.SGD}</span>
             </div>
             <div className="flex justify-between">
               <span>1 SAR =</span>
-              <span className="font-bold text-slate-900">MYR {EXCHANGE_RATES.SAR}</span>
+              <span className="font-bold text-slate-900">MYR {ACTIVE_RATES.SAR}</span>
             </div>
             <div className="flex justify-between col-span-2 border-t border-slate-100 pt-1 mt-0.5">
               <span>10K IDR =</span>
-              <span className="font-bold text-slate-900">MYR {(EXCHANGE_RATES.IDR * 10000).toFixed(2)}</span>
+              <span className="font-bold text-slate-900">MYR {(ACTIVE_RATES.IDR * 10000).toFixed(2)}</span>
             </div>
           </div>
         </div>

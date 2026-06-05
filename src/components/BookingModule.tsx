@@ -29,7 +29,7 @@ import {
   TrendingUp,
   Download
 } from 'lucide-react';
-import { BookingItem, B2BPartner, Supplier, Language, HotelContract, RoomAllocation, MealsConfig, AdditionalService, PricingRule } from '../types';
+import { BookingItem, B2BPartner, Supplier, Language, HotelContract, RoomAllocation, MealsConfig, AdditionalService, PricingRule, UserRole } from '../types';
 import { TRANSLATIONS } from '../Translations';
 
 interface BookingModuleProps {
@@ -44,6 +44,10 @@ interface BookingModuleProps {
   onRefreshDatabase: () => Promise<void>;
   currentUserEmail: string;
   currentUserName: string;
+  currentUserRole?: UserRole;
+  sharedSearchQuery?: string;
+  onDocumentLinkClick?: (id: string) => void;
+  exchangeRates?: Record<string, number>;
 }
 
 const PACKAGE_TEMPLATES = [
@@ -86,7 +90,11 @@ export default function BookingModule({
   onDeleteBooking,
   onRefreshDatabase,
   currentUserEmail,
-  currentUserName
+  currentUserName,
+  currentUserRole = 'Staff',
+  sharedSearchQuery = '',
+  onDocumentLinkClick,
+  exchangeRates
 }: BookingModuleProps) {
   const t = (key: string) => TRANSLATIONS[lang][key] || key;
 
@@ -95,6 +103,14 @@ export default function BookingModule({
 
   // Search/Filters
   const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (sharedSearchQuery && sharedSearchQuery.startsWith('BK-')) {
+      setSearch(sharedSearchQuery);
+      setActiveSubTab('list');
+    }
+  }, [sharedSearchQuery]);
+
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [typeFilter, setTypeFilter] = useState<string>('All');
 
@@ -102,6 +118,10 @@ export default function BookingModule({
   const [isEditing, setIsEditing] = useState(false);
   const [editId, setEditId] = useState<string | undefined>(undefined);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
+  // Non-contracted hotel flags
+  const [isMakkahOther, setIsMakkahOther] = useState(false);
+  const [isMadinahOther, setIsMadinahOther] = useState(false);
 
   // Form State
   const [form, setForm] = useState<Partial<BookingItem>>({
@@ -182,7 +202,7 @@ export default function BookingModule({
   const calculateTotalBookingAmount = (currentForm: Partial<BookingItem>) => {
     const nights = getTravelNights(currentForm.travelDateFrom || '', currentForm.travelDateTo || '');
     const pax = currentForm.paxCount || 1;
-    const rateToConvert = EXCHANGE_RATES[currentForm.currency as keyof typeof EXCHANGE_RATES] || 1.0;
+    const rateToConvert = (exchangeRates || EXCHANGE_RATES)[currentForm.currency as keyof typeof EXCHANGE_RATES] || 1.0;
 
     // 1. Bedding Sum
     const beddingMYR = currentForm.roomAllocations?.reduce((acc, alloc) => {
@@ -371,6 +391,8 @@ export default function BookingModule({
     setErrorMessage(null);
     setIsEditing(true);
     setEditId(undefined);
+    setIsMakkahOther(false);
+    setIsMadinahOther(false);
 
     const defaultForm: Partial<BookingItem> = {
       customerName: '',
@@ -417,6 +439,11 @@ export default function BookingModule({
     setErrorMessage(null);
     setIsEditing(true);
     setEditId(b.id);
+
+    const isMakOther = b.hotelMakkah ? !makkahHotels.some(h => h.hotelName === b.hotelMakkah) : false;
+    const isMadOther = b.hotelMadinah ? !madinahHotels.some(h => h.hotelName === b.hotelMadinah) : false;
+    setIsMakkahOther(isMakOther);
+    setIsMadinahOther(isMadOther);
     
     // Fill allocations if empty
     const defaultAllocations = [
@@ -444,6 +471,67 @@ export default function BookingModule({
     };
 
     updateFormStateAndTotals(currentForm);
+  };
+
+  // Master Customer & Vendor Autocomplete handlers
+  const handleCustomerNameChange = (val: string) => {
+    // 1. Try to find matched B2B Partner by company name or contact name
+    const matchedPartner = partners.find(p => 
+      (p.companyName && p.companyName.toLowerCase() === val.toLowerCase()) || 
+      (p.contactName && p.contactName.toLowerCase() === val.toLowerCase())
+    );
+
+    if (matchedPartner) {
+      setForm(prev => ({
+        ...prev,
+        customerName: val,
+        customerPhone: matchedPartner.phone || prev.customerPhone,
+        customerEmail: matchedPartner.email || prev.customerEmail,
+        b2bAgentId: matchedPartner.id,
+        b2bAgentName: matchedPartner.companyName
+      }));
+      return;
+    }
+
+    // 2. Try to find matched patient/pilgrim from existing bookings
+    const matchedBooking = bookings.find(b => 
+      b.customerName && b.customerName.toLowerCase() === val.toLowerCase()
+    );
+
+    if (matchedBooking) {
+      setForm(prev => ({
+        ...prev,
+        customerName: val,
+        customerPhone: matchedBooking.customerPhone || prev.customerPhone,
+        customerEmail: matchedBooking.customerEmail || prev.customerEmail,
+        b2bAgentId: matchedBooking.b2bAgentId || prev.b2bAgentId,
+        b2bAgentName: matchedBooking.b2bAgentName || prev.b2bAgentName
+      }));
+      return;
+    }
+
+    // 3. Fallback
+    setForm(prev => ({ ...prev, customerName: val }));
+  };
+
+  const handlePartnerNameChange = (val: string) => {
+    const matched = partners.find(p => 
+      p.companyName.toLowerCase() === val.toLowerCase() || 
+      p.id.toLowerCase() === val.toLowerCase()
+    );
+    if (matched) {
+      setForm(prev => ({
+        ...prev,
+        b2bAgentId: matched.id,
+        b2bAgentName: matched.companyName
+      }));
+    } else {
+      setForm(prev => ({
+        ...prev,
+        b2bAgentId: '',
+        b2bAgentName: val
+      }));
+    }
   };
 
   const handleAddService = () => {
@@ -585,7 +673,8 @@ export default function BookingModule({
         body: JSON.stringify({
           booking: finalForm,
           authorEmail: currentUserEmail,
-          authorName: currentUserName
+          authorName: currentUserName,
+          userRole: currentUserRole
         })
       });
 
@@ -599,6 +688,33 @@ export default function BookingModule({
       }
     } catch (err) {
       setErrorMessage("Network error occurred validating hotel contract capacities.");
+    }
+  };
+
+  const handleMarkAsInvoiced = async (b: BookingItem) => {
+    if (!confirm(`Are you sure you want to transition booking ${b.id} to INVOICED status? This will auto-generate the booking invoice and lock down the travel itinerary.`)) return;
+    try {
+      const res = await fetch(`/api/bookings/${b.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          booking: { ...b, bookingStatus: 'Invoiced' },
+          authorEmail: currentUserEmail,
+          authorName: currentUserName,
+          userRole: currentUserRole
+        })
+      });
+
+      const body = await res.json();
+      if (res.ok) {
+        await onSaveBooking({ ...b, bookingStatus: 'Invoiced' }, b.id);
+        alert(`Booking ${b.id} successfully marked as Invoiced & client invoice is synchronized!`);
+      } else {
+        alert(body.error || "Failed to mark booking as Invoiced.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Network error marking booking as Invoiced.");
     }
   };
 
@@ -691,7 +807,7 @@ export default function BookingModule({
   const servicesUsageSummary: Record<string, { bookingsCount: number; totalRevenueMYR: number }> = {};
 
   reportingBookings.forEach(b => {
-    const rate = EXCHANGE_RATES[b.currency as keyof typeof EXCHANGE_RATES] || 1.0;
+    const rate = (exchangeRates || EXCHANGE_RATES)[b.currency as keyof typeof EXCHANGE_RATES] || 1.0;
     if (b.customServices) {
       b.customServices.forEach(s => {
         if (!servicesUsageSummary[s.name]) {
@@ -786,12 +902,40 @@ export default function BookingModule({
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">Roster Lead Pilgrim Name</label>
                 <input
                   type="text"
+                  list="masterCustomerList"
                   value={form.customerName}
-                  onChange={e => setForm({ ...form, customerName: e.target.value })}
+                  onChange={e => handleCustomerNameChange(e.target.value)}
                   required
                   className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:ring-1 focus:ring-emerald-800 focus:outline-none"
                   placeholder="e.g. Haji Mohd Shah bin Sulaiman"
                 />
+                {(() => {
+                  const val = form.customerName || '';
+                  const matchedPartner = partners.find(p => 
+                    (p.companyName && p.companyName.toLowerCase() === val.toLowerCase()) || 
+                    (p.contactName && p.contactName.toLowerCase() === val.toLowerCase())
+                  );
+                  const matchedBooking = bookings.find(b => 
+                    b.customerName && b.customerName.toLowerCase() === val.toLowerCase()
+                  );
+
+                  if (matchedPartner) {
+                    return (
+                      <span className="text-[9px] text-emerald-700 font-extrabold flex items-center gap-1 mt-1 bg-emerald-55 border border-emerald-200 px-1.5 py-0.5 rounded">
+                        <Check className="w-3 h-3 text-emerald-600" />
+                        B2B Partner Link: {matchedPartner.companyName}
+                      </span>
+                    );
+                  } else if (matchedBooking) {
+                    return (
+                      <span className="text-[9px] text-sky-700 font-extrabold flex items-center gap-1 mt-1 bg-sky-55 border border-sky-200 px-1.5 py-0.5 rounded">
+                        <Check className="w-3 h-3 text-sky-600" />
+                        Past Pilgrim Found (Autofilled)
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
               <div>
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">Contact Phone Number</label>
@@ -863,16 +1007,69 @@ export default function BookingModule({
 
               {form.hotelSelectionType !== 'Madinah Only' ? (
                 <div>
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide block mb-1">Makkah Contracted Hotel</label>
-                  <select
-                    value={form.hotelMakkah}
-                    onChange={e => updateFormStateAndTotals({ ...form, hotelMakkah: e.target.value })}
-                    className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none"
-                  >
-                    {makkahHotels.map(h => (
-                      <option key={h.id} value={h.hotelName}>{h.hotelName} (Makkah - Valid to {h.validTo})</option>
-                    ))}
-                  </select>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">
+                      {isMakkahOther ? "Makkah Other Hotel / Vendor" : "Makkah Contracted Hotel"}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextOther = !isMakkahOther;
+                        setIsMakkahOther(nextOther);
+                        if (nextOther) {
+                          const hotelSupplier = suppliers.find(s => s.category === 'Hotel');
+                          updateFormStateAndTotals({ ...form, hotelMakkah: hotelSupplier ? hotelSupplier.name : '' });
+                        } else {
+                          updateFormStateAndTotals({ ...form, hotelMakkah: makkahHotels[0]?.hotelName || '' });
+                        }
+                      }}
+                      className="text-[9px] hover:text-emerald-800 font-extrabold text-emerald-700 cursor-pointer flex items-center gap-1"
+                    >
+                      {isMakkahOther ? "← Back to Contracts" : "+ Other than Contract"}
+                    </button>
+                  </div>
+                  
+                  {isMakkahOther ? (
+                    <div className="space-y-1.5">
+                      <select
+                        value={suppliers.filter(s => s.category === 'Hotel').some(s => s.name === form.hotelMakkah) ? form.hotelMakkah : "manual-entry"}
+                        onChange={e => {
+                          if (e.target.value === "manual-entry") {
+                            updateFormStateAndTotals({ ...form, hotelMakkah: '' });
+                          } else {
+                            updateFormStateAndTotals({ ...form, hotelMakkah: e.target.value });
+                          }
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none"
+                      >
+                        {suppliers.filter(s => s.category === 'Hotel').map(s => (
+                          <option key={s.id} value={s.name}>{s.name} (Hotel Vendor)</option>
+                        ))}
+                        <option value="manual-entry">Manual Key-In (Type other hotel name...)</option>
+                      </select>
+                      
+                      {!suppliers.filter(s => s.category === 'Hotel').some(s => s.name === form.hotelMakkah) && (
+                        <input
+                          type="text"
+                          value={form.hotelMakkah || ''}
+                          onChange={e => updateFormStateAndTotals({ ...form, hotelMakkah: e.target.value })}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-800"
+                          placeholder="Enter other hotel name manually..."
+                          required
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <select
+                      value={form.hotelMakkah}
+                      onChange={e => updateFormStateAndTotals({ ...form, hotelMakkah: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none"
+                    >
+                      {makkahHotels.map(h => (
+                        <option key={h.id} value={h.hotelName}>{h.hotelName} (Makkah - Valid to {h.validTo})</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               ) : (
                 <div className="opacity-40">
@@ -883,16 +1080,69 @@ export default function BookingModule({
 
               {form.hotelSelectionType !== 'Makkah Only' ? (
                 <div>
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide block mb-1">Madinah Contracted Hotel</label>
-                  <select
-                    value={form.hotelMadinah}
-                    onChange={e => updateFormStateAndTotals({ ...form, hotelMadinah: e.target.value })}
-                    className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none"
-                  >
-                    {madinahHotels.map(h => (
-                      <option key={h.id} value={h.hotelName}>{h.hotelName} (Madinah - Valid to {h.validTo})</option>
-                    ))}
-                  </select>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">
+                      {isMadinahOther ? "Madinah Other Hotel / Vendor" : "Madinah Contracted Hotel"}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextOther = !isMadinahOther;
+                        setIsMadinahOther(nextOther);
+                        if (nextOther) {
+                          const hotelSupplier = suppliers.find(s => s.category === 'Hotel');
+                          updateFormStateAndTotals({ ...form, hotelMadinah: hotelSupplier ? hotelSupplier.name : '' });
+                        } else {
+                          updateFormStateAndTotals({ ...form, hotelMadinah: madinahHotels[0]?.hotelName || '' });
+                        }
+                      }}
+                      className="text-[9px] hover:text-emerald-800 font-extrabold text-emerald-700 cursor-pointer flex items-center gap-1"
+                    >
+                      {isMadinahOther ? "← Back to Contracts" : "+ Other than Contract"}
+                    </button>
+                  </div>
+
+                  {isMadinahOther ? (
+                    <div className="space-y-1.5">
+                      <select
+                        value={suppliers.filter(s => s.category === 'Hotel').some(s => s.name === form.hotelMadinah) ? form.hotelMadinah : "manual-entry"}
+                        onChange={e => {
+                          if (e.target.value === "manual-entry") {
+                            updateFormStateAndTotals({ ...form, hotelMadinah: '' });
+                          } else {
+                            updateFormStateAndTotals({ ...form, hotelMadinah: e.target.value });
+                          }
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none"
+                      >
+                        {suppliers.filter(s => s.category === 'Hotel').map(s => (
+                          <option key={s.id} value={s.name}>{s.name} (Hotel Vendor)</option>
+                        ))}
+                        <option value="manual-entry">Manual Key-In (Type other hotel name...)</option>
+                      </select>
+
+                      {!suppliers.filter(s => s.category === 'Hotel').some(s => s.name === form.hotelMadinah) && (
+                        <input
+                          type="text"
+                          value={form.hotelMadinah || ''}
+                          onChange={e => updateFormStateAndTotals({ ...form, hotelMadinah: e.target.value })}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-800"
+                          placeholder="Enter other hotel name manually..."
+                          required
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <select
+                      value={form.hotelMadinah}
+                      onChange={e => updateFormStateAndTotals({ ...form, hotelMadinah: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none"
+                    >
+                      {madinahHotels.map(h => (
+                        <option key={h.id} value={h.hotelName}>{h.hotelName} (Madinah - Valid to {h.validTo})</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               ) : (
                 <div className="opacity-40">
@@ -1299,17 +1549,37 @@ export default function BookingModule({
 
               <div>
                 <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">B2B Partner Link (Optional)</label>
-                <select
-                  value={form.b2bAgentId || ""}
-                  onChange={e => setForm({ ...form, b2bAgentId: e.target.value || null })}
-                  className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none"
-                >
-                  <option value="">Direct Corporate B2C Pilgrim Client</option>
-                  {partners.map(p => (
-                    <option key={p.id} value={p.id}>{p.companyName} ({p.country} - {p.commissionRate}%)</option>
-                  ))}
-                </select>
-                <p className="text-[9px] text-slate-400 mt-1">Affiliate commissions track automatically upon confirmation.</p>
+                <input
+                  type="text"
+                  list="masterPartnerList"
+                  value={form.b2bAgentName || ""}
+                  onChange={e => handlePartnerNameChange(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-800"
+                  placeholder="Direct Corporate B2C Pilgrim Client"
+                />
+                {(() => {
+                  if (form.b2bAgentId) {
+                    const matchedP = partners.find(p => p.id === form.b2bAgentId);
+                    return (
+                      <span className="text-[9px] text-emerald-700 font-extrabold flex items-center gap-1 mt-1 bg-emerald-55 border border-emerald-200 px-1.5 py-0.5 rounded">
+                        <Check className="w-3 h-3 text-emerald-600" />
+                        Linked Partner ID: {form.b2bAgentId} ({matchedP?.country})
+                      </span>
+                    );
+                  } else if (form.b2bAgentName) {
+                    return (
+                      <span className="text-[9px] text-amber-700 font-extrabold flex items-center gap-1 mt-1 bg-amber-55 border border-amber-200 px-1.5 py-0.5 rounded">
+                        <AlertTriangle className="w-3 h-3 text-amber-600 animate-pulse" />
+                        Custom Unregistered Partner
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="text-[9px] text-slate-400 font-medium block mt-1">
+                      Direct Bookings. Or type a Partner name to search & link.
+                    </span>
+                  );
+                })()}
               </div>
 
               <div>
@@ -1508,9 +1778,29 @@ export default function BookingModule({
                               <td className="py-4 px-6 text-center">
                                 <div className="flex flex-col items-center gap-1">
                                   {b.bookingStatus === 'Confirmed' && (
-                                    <span className="bg-emerald-50 text-emerald-850 border border-emerald-200 px-3 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1">
-                                      <CheckCircle2 className="w-3 h-3 text-emerald-700" />
-                                      Confirmed
+                                    <>
+                                      <span className="bg-emerald-50 text-emerald-850 border border-emerald-200 px-3 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1">
+                                        <CheckCircle2 className="w-3 h-3 text-emerald-700" />
+                                        Confirmed
+                                      </span>
+                                      {(currentUserRole === 'Admin' || currentUserRole === 'Manager' || currentUserRole === 'Finance') && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleMarkAsInvoiced(b);
+                                          }}
+                                          className="text-[9px] mt-1 text-slate-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 font-extrabold px-1.5 py-0.5 rounded transition-all cursor-pointer shadow-xs whitespace-nowrap"
+                                          title="Authorize change of confirmed status to invoiced"
+                                        >
+                                          Mark as Invoiced 🧾
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                  {b.bookingStatus === 'Invoiced' && (
+                                    <span className="bg-blue-50 text-blue-900 border border-blue-200 px-3 py-1 rounded-full text-[10px] font-extrabold flex items-center gap-1">
+                                      <FileText className="w-3 h-3 text-blue-700" />
+                                      Invoiced
                                     </span>
                                   )}
                                   {b.bookingStatus === 'Pending' && (
@@ -1812,6 +2102,23 @@ export default function BookingModule({
               </div>
             </div>
           )}
+
+          {/* Master autocomplete datalists */}
+          <datalist id="masterCustomerList">
+            {Array.from(new Set([
+              ...bookings.map(b => b.customerName).filter(Boolean),
+              ...partners.map(p => p.companyName).filter(Boolean),
+              ...partners.map(p => p.contactName).filter(Boolean)
+            ])).sort().map((name, idx) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+
+          <datalist id="masterPartnerList">
+            {partners.map(p => (
+              <option key={p.id} value={p.companyName}>{p.companyName} ({p.country})</option>
+            ))}
+          </datalist>
 
         </div>
       )}

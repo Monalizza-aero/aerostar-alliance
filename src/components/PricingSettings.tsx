@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { DollarSign, Trash2, Plus, Info, Globe, Coins, Percent, Save, CheckCircle } from 'lucide-react';
+import { DollarSign, Trash2, Plus, Info, Globe, Coins, Percent, Save, CheckCircle, Tag, X, Building } from 'lucide-react';
 import { PricingRule, HotelContract, Language } from '../types';
 
 interface PricingSettingsProps {
@@ -115,6 +115,77 @@ export default function PricingSettings({
       alert("Error contacting the pricing controller service.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const [aliasInputs, setAliasInputs] = useState<Record<string, string>>({});
+
+  const handleAddAlias = async (contract: HotelContract) => {
+    const text = (aliasInputs[contract.id] || '').trim();
+    if (!text) return;
+
+    const currentAliases = contract.aliases || [];
+    if (currentAliases.some(a => a.toLowerCase() === text.toLowerCase())) {
+      alert("This alias already exists for this hotel.");
+      return;
+    }
+
+    const updatedAliases = [...currentAliases, text];
+    const updatedContract = {
+      ...contract,
+      aliases: updatedAliases
+    };
+
+    try {
+      const res = await fetch(`/api/hotel-contracts/${contract.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract: updatedContract,
+          authorEmail: currentUserEmail,
+          authorName: 'Hotel Directory Settings'
+        })
+      });
+
+      if (res.ok) {
+        setAliasInputs(prev => ({ ...prev, [contract.id]: '' }));
+        await onRefreshDatabase();
+      } else {
+        alert("Failed to save alias to server.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Network error updating hotel aliases.");
+    }
+  };
+
+  const handleClearAlias = async (contract: HotelContract, aliasToRemove: string) => {
+    const currentAliases = contract.aliases || [];
+    const updatedAliases = currentAliases.filter(a => a !== aliasToRemove);
+    const updatedContract = {
+      ...contract,
+      aliases: updatedAliases
+    };
+
+    try {
+      const res = await fetch(`/api/hotel-contracts/${contract.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract: updatedContract,
+          authorEmail: currentUserEmail,
+          authorName: 'Hotel Directory Settings'
+        })
+      });
+
+      if (res.ok) {
+        await onRefreshDatabase();
+      } else {
+        alert("Failed to remove alias from server.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Network error removing hotel alias.");
     }
   };
 
@@ -309,6 +380,79 @@ export default function PricingSettings({
 
         </div>
 
+      </div>
+
+      {/* Hotel Settings & Alternative Name Aliases */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4 shadow-2xs">
+        <div>
+          <h3 className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 uppercase tracking-wider">
+            <Building className="w-4 h-4 text-emerald-800" />
+            Hotel Directory & Alternative Name Aliases (Hotel Settings)
+          </h3>
+          <p className="text-[10px] text-slate-500">Configure alternative spelling names or abbreviations (aliases) for each hotel. This is used by the Excel/CSV importer to handle extra spaces, casing variations, or alternative name conventions.</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {hotelContracts.map((contract) => (
+            <div key={contract.id} id={`alias-card-${contract.id}`} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h4 className="font-extrabold text-slate-900 text-xs">{contract.hotelName}</h4>
+                  <span className="text-[9px] text-slate-450 font-mono font-bold block mt-0.5">ID: {contract.id} | Location: {contract.location}</span>
+                </div>
+              </div>
+
+              {/* Badges of Existing Aliases */}
+              <div className="flex flex-wrap gap-1.5 min-h-[1.5rem] pt-1">
+                {(contract.aliases || []).length === 0 ? (
+                  <span className="text-[9px] text-slate-400 italic">No alternative name aliases configured yet. Default spelling required.</span>
+                ) : (
+                  (contract.aliases || []).map((alias) => (
+                    <span 
+                      key={alias}
+                      className="bg-emerald-50 text-emerald-8 px-2 py-0.5 rounded-md text-[10px] font-bold border border-emerald-200/50 flex items-center gap-1 animate-in fade-in zoom-in-95"
+                    >
+                      <Tag className="w-2.5 h-2.5 text-emerald-600" />
+                      {alias}
+                      <button
+                        onClick={() => handleClearAlias(contract, alias)}
+                        className="text-red-500 hover:text-red-700 hover:bg-slate-200 rounded p-0.5 cursor-pointer ml-0.5"
+                        title="Remove alias"
+                      >
+                        <X className="w-2 h-2" />
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+
+              {/* Add form */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Add alias (e.g. Anjum, Pullman)"
+                  value={aliasInputs[contract.id] || ''}
+                  onChange={(e) => setAliasInputs(prev => ({ ...prev, [contract.id]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddAlias(contract);
+                    }
+                  }}
+                  className="bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-[11px] font-medium grow focus:outline-emerald-800"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleAddAlias(contract)}
+                  className="bg-emerald-800 hover:bg-emerald-950 text-white px-2.5 py-1 text-[10px] font-extrabold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
     </div>

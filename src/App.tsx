@@ -31,7 +31,9 @@ import {
   ActivityLog, 
   Language,
   HotelContract,
-  PricingRule
+  PricingRule,
+  LeaveRequest,
+  Payslip
 } from './types';
 
 import { TRANSLATIONS } from './Translations';
@@ -64,6 +66,9 @@ export default function App() {
     logs: ActivityLog[];
     hotelContracts?: HotelContract[];
     pricingRules?: PricingRule[];
+    exchangeRates?: Record<string, number>;
+    leaveRequests?: LeaveRequest[];
+    payslips?: Payslip[];
   }>({
     bookings: [],
     invoices: [],
@@ -73,11 +78,26 @@ export default function App() {
     employees: [],
     logs: [],
     hotelContracts: [],
-    pricingRules: []
+    pricingRules: [],
+    exchangeRates: { MYR: 1.0, SGD: 3.3, SAR: 1.2, IDR: 0.0003 },
+    leaveRequests: [],
+    payslips: []
   });
 
   const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<'Admin' | 'Manager' | 'Finance' | 'Agent' | 'Staff'>('Admin');
+  const [sharedSearchQuery, setSharedSearchQuery] = useState<string>('');
+
+  const REFINED_PERSONAS = [
+    { name: 'Ahmad Admin', email: 'admin@aero-star.co', role: 'Admin' },
+    { name: 'Sarah Manager', email: 'sarah.m@aero-star.co', role: 'Manager' },
+    { name: 'Kamal Finance', email: 'finance@aero-star.co', role: 'Finance' },
+    { name: 'Zack Agent', email: 'b2b.agent@aero-star.co', role: 'Agent' },
+    { name: 'Mary Staff', email: 'staff@aero-star.co', role: 'Staff' }
+  ];
+
+  const currentPersona = REFINED_PERSONAS.find(p => p.role === currentUserRole) || REFINED_PERSONAS[0];
 
   // Load database on mount
   useEffect(() => {
@@ -123,6 +143,15 @@ export default function App() {
       }
     } catch (err) {
       console.error("Reset error:", err);
+    }
+  };
+
+  const handleDocumentLinkClick = (id: string) => {
+    setSharedSearchQuery(id);
+    if (id.startsWith('BK-')) {
+      setActiveTab('bookings');
+    } else if (id.startsWith('INV-')) {
+      setActiveTab('invoices');
     }
   };
 
@@ -470,6 +499,26 @@ export default function App() {
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
 
+            {/* Active Workspace Persona Dropdown Switcher */}
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5">
+              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block shrink-0">Persona:</span>
+              <select
+                value={currentUserRole}
+                onChange={(e) => {
+                  setCurrentUserRole(e.target.value as any);
+                  setSharedSearchQuery(''); // Flush routing reference queries
+                }}
+                className="bg-transparent text-amber-400 font-black text-[10px] uppercase outline-none cursor-pointer pr-1"
+                title="Surgical Identity Simulator - Switches active role restrictions instantly"
+              >
+                <option value="Admin" className="bg-slate-900 text-white">Ahmad Admin (Admin) 👑</option>
+                <option value="Manager" className="bg-slate-900 text-white">Sarah Manager (Manager) 📂</option>
+                <option value="Finance" className="bg-slate-900 text-white">Kamal Finance (Finance) 💰</option>
+                <option value="Agent" className="bg-slate-900 text-white">Zack Agent (Agent) 🤝</option>
+                <option value="Staff" className="bg-slate-900 text-white">Mary Staff (Staff) ✈️</option>
+              </select>
+            </div>
+
             {/* Language Switch */}
             <button
               onClick={() => setLang(lang === 'EN' ? 'BM' : 'EN')}
@@ -638,6 +687,7 @@ export default function App() {
                       transactions={db.transactions} 
                       lang={lang} 
                       onAddTransaction={handleAddTransaction} 
+                      exchangeRates={db.exchangeRates}
                     />
                   </div>
 
@@ -684,8 +734,12 @@ export default function App() {
                 onSaveBooking={handleSaveBooking}
                 onDeleteBooking={handleDeleteBooking}
                 onRefreshDatabase={fetchDatabase}
-                currentUserEmail="finance@aero-star.co"
-                currentUserName="Ahmad Farhan"
+                currentUserEmail={currentPersona.email}
+                currentUserName={currentPersona.name}
+                currentUserRole={currentUserRole}
+                sharedSearchQuery={sharedSearchQuery}
+                onDocumentLinkClick={handleDocumentLinkClick}
+                exchangeRates={db.exchangeRates}
               />
             )}
 
@@ -698,6 +752,12 @@ export default function App() {
                 lang={lang}
                 onUpdateInvoicePayment={handleUpdateInvoicePayment}
                 onRefreshDatabase={fetchDatabase}
+                currentUserEmail={currentPersona.email}
+                currentUserName={currentPersona.name}
+                currentUserRole={currentUserRole}
+                sharedSearchQuery={sharedSearchQuery}
+                onDocumentLinkClick={handleDocumentLinkClick}
+                exchangeRates={db.exchangeRates}
               />
             )}
 
@@ -728,6 +788,9 @@ export default function App() {
                 lang={lang}
                 onAddEmployee={handleAddEmployee}
                 onUpdateAttendance={handleUpdateAttendance}
+                leaveRequests={db.leaveRequests || []}
+                payslips={db.payslips || []}
+                onUpdateDb={setDb}
               />
             )}
 

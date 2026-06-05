@@ -30,7 +30,7 @@ import {
   CheckSquare,
   Square
 } from 'lucide-react';
-import { InvoiceItemModel, BookingItem, B2BPartner, Language, InvoiceItem } from '../types';
+import { InvoiceItemModel, BookingItem, B2BPartner, Language, InvoiceItem, UserRole } from '../types';
 import { TRANSLATIONS } from '../Translations';
 
 interface InvoiceModuleProps {
@@ -40,6 +40,12 @@ interface InvoiceModuleProps {
   lang: Language;
   onUpdateInvoicePayment: (id: string, paidAmount: number, paymentStatus: 'Unpaid' | 'Partial' | 'Paid') => Promise<void>;
   onRefreshDatabase?: () => Promise<void>;
+  currentUserEmail?: string;
+  currentUserName?: string;
+  currentUserRole?: UserRole;
+  sharedSearchQuery?: string;
+  onDocumentLinkClick?: (id: string) => void;
+  exchangeRates?: Record<string, number>;
 }
 
 export default function InvoiceModule({
@@ -48,18 +54,24 @@ export default function InvoiceModule({
   partners,
   lang,
   onUpdateInvoicePayment,
-  onRefreshDatabase
+  onRefreshDatabase,
+  currentUserEmail = 'finance@aero-star.co',
+  currentUserName = 'Ahmad Farhan',
+  currentUserRole = 'Staff',
+  sharedSearchQuery = '',
+  onDocumentLinkClick,
+  exchangeRates
 }: InvoiceModuleProps) {
   const t = (key: string) => TRANSLATIONS[lang][key] || key;
 
-  // Tabs layout: ledger (Default list), create (Create Invoice), soa (Statement of Account), reports (Reporting), import (Bulk)
-  const [activeSubTab, setActiveSubTab] = useState<'ledger' | 'create' | 'soa' | 'reports' | 'import'>('ledger');
+  // Tabs layout: ledger (Default list), create (Create Invoice), soa (Statement of Account), reports (Reporting), import (Bulk), rates (Update rates)
+  const [activeSubTab, setActiveSubTab] = useState<'ledger' | 'create' | 'soa' | 'reports' | 'import' | 'rates'>('ledger');
 
   // Multi-currency list
   const currencies: ('MYR' | 'IDR' | 'SGD' | 'SAR')[] = ['MYR', 'IDR', 'SGD', 'SAR'];
 
   // Currency exchange rates relative to MYR (for unified reports)
-  const EXCHANGE_RATES = {
+  const EXCHANGE_RATES = exchangeRates || {
     MYR: 1.0,
     SAR: 1.25,  // 1 SAR = 1.25 MYR
     SGD: 3.45,  // 1 SGD = 3.45 MYR
@@ -68,6 +80,13 @@ export default function InvoiceModule({
 
   // State for Invoice Search/Filter in Ledger
   const [search, setSearch] = useState('');
+  
+  React.useEffect(() => {
+    if (sharedSearchQuery && (sharedSearchQuery.startsWith('INV-') || sharedSearchQuery.startsWith('BK-'))) {
+      setSearch(sharedSearchQuery);
+    }
+  }, [sharedSearchQuery]);
+
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [typeFilter, setTypeFilter] = useState<string>('All');
   const [selectedInvoice, setSelectedInvoice] = useState<InvoiceItemModel | null>(null);
@@ -474,8 +493,9 @@ export default function InvoiceModule({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           invoice: payload,
-          authorEmail: 'finance@aero-star.co',
-          authorName: 'Ahmad Farhan'
+          authorEmail: currentUserEmail,
+          authorName: currentUserName,
+          userRole: currentUserRole
         })
       });
 
@@ -484,7 +504,11 @@ export default function InvoiceModule({
         if (onRefreshDatabase) await onRefreshDatabase();
         setSelectedInvoice(body.invoice);
         setIsEditingInvoice(false);
-        alert('Invoice adjustments successfully saved & version upgraded with full audit log trails!');
+        if (body.isAwaitingApproval) {
+          alert('🔑 NOTICE: Your modifications have been saved as a Draft and submitted for Manager/Admin Approval. Direct overrides are restricted for your current user role.');
+        } else {
+          alert('Invoice adjustments successfully saved & version upgraded with full audit log trails!');
+        }
       } else {
         const err = await res.json();
         alert('Error: ' + err.error);
@@ -1113,12 +1137,149 @@ export default function InvoiceModule({
             <UploadCloud className="w-3.5 h-3.5" />
             Imports Pasteboard
           </button>
+          <button
+            onClick={() => setActiveSubTab('rates')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all ${activeSubTab === 'rates' ? 'bg-white text-emerald-900 shadow-xs border-b-2 border-emerald-900' : 'text-slate-500 hover:text-slate-950'}`}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            Update Currency Rates
+          </button>
         </div>
       </div>
 
       {/* ======================= TAB 1: INVOICES LEDGER ======================= */}
       {activeSubTab === 'ledger' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 block-print-hide">
+        <div className="space-y-6 block-print-hide">
+          {invoices.filter(inv => inv.approvalStatus === 'Awaiting Approval').length > 0 && (
+            <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border-2 border-amber-500/30 rounded-2xl p-6 space-y-4">
+              <div className="flex items-center gap-2 border-b border-amber-500/25 pb-3">
+                <FileText className="w-5 h-5 text-amber-600 shrink-0" />
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2 leading-none">
+                    UMRAH INVOICELINE APPROVAL WORKFLOW
+                    <span className="bg-amber-500 text-slate-950 px-2.5 py-0.5 rounded-full text-[9px] font-black tracking-widest uppercase ml-1 animate-pulse">
+                      {invoices.filter(inv => inv.approvalStatus === 'Awaiting Approval').length} Pending Review
+                    </span>
+                  </h3>
+                  <p className="text-[10px] text-slate-500 mt-1">Invoices awaiting authorization from a Corporate Admin or Manager before changes are committed permanently.</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {invoices.filter(inv => inv.approvalStatus === 'Awaiting Approval').map(inv => {
+                  let draftData: any = {};
+                  try {
+                    draftData = inv.draftInvoice ? JSON.parse(inv.draftInvoice) : {};
+                  } catch (e) {}
+
+                  const handleApprove = async () => {
+                    try {
+                      const res = await fetch(`/api/invoices/${inv.id}/approve`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          authorEmail: currentUserEmail,
+                          authorName: currentUserName,
+                          userRole: currentUserRole
+                        })
+                      });
+                      if (res.ok) {
+                        if (onRefreshDatabase) await onRefreshDatabase();
+                        alert(`Invoice ${inv.id} draft modifications successfully authorized & committed.`);
+                      } else {
+                        const err = await res.json();
+                        alert(err.error || 'Authorization failed.');
+                      }
+                    } catch (e: any) {
+                      alert('Connection error occurred: ' + e.message);
+                    }
+                  };
+
+                  const handleReject = async () => {
+                    if (!confirm('Are you certain you wish to decline these draft changes and restore original state?')) return;
+                    try {
+                      const res = await fetch(`/api/invoices/${inv.id}/reject`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          authorEmail: currentUserEmail,
+                          authorName: currentUserName,
+                          userRole: currentUserRole
+                        })
+                      });
+                      if (res.ok) {
+                        if (onRefreshDatabase) await onRefreshDatabase();
+                        alert('Invoice draft changes declined & reverted to original state.');
+                      } else {
+                        const err = await res.json();
+                        alert(err.error || 'Authorization failed.');
+                      }
+                    } catch (e: any) {
+                      alert('Connection error occurred: ' + e.message);
+                    }
+                  };
+
+                  return (
+                    <div key={inv.id} className="bg-white border border-amber-500/20 rounded-xl p-4.5 space-y-3.5 shadow-sm">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <strong className="text-xs text-slate-900 block font-black">{inv.id} — {inv.customerName}</strong>
+                          <span className="text-[10px] text-slate-500 font-mono block mt-0.5">Associated Booking: {inv.bookingId || 'Ad-hoc Manual'}</span>
+                        </div>
+                        <span className="bg-amber-100 text-amber-850 font-bold px-2 py-0.5 rounded text-[8px] border border-amber-200">
+                          PENDING MANAGER OVERRIDE
+                        </span>
+                      </div>
+
+                      <div className="bg-slate-50 border border-slate-150 rounded-lg p-3 text-[11px] text-slate-600 font-medium">
+                        <p className="font-extrabold text-amber-850 mb-1 border-b border-slate-200 pb-1 flex items-center gap-1">
+                          <Eye className="w-3.5 h-3.5 text-amber-600" /> Proposed Changes Description:
+                        </p>
+                        <p className="leading-relaxed text-slate-700 font-mono text-[10px] whitespace-pre-wrap">{inv.pendingChanges || 'Requested grand total adjustment.'}</p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 text-center border-t border-b border-dashed border-slate-250 py-2.5">
+                        <div className="border-r border-slate-200">
+                          <span className="text-[8px] text-slate-400 font-bold uppercase tracking-wider block">Original Total</span>
+                          <span className="text-xs font-mono font-black text-slate-500">{inv.currency} {inv.grandTotal.toLocaleString()}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] text-amber-600 font-bold uppercase tracking-wider block">Proposed Total</span>
+                          <span className="text-xs font-mono font-black text-amber-700">{draftData.currency || inv.currency} {(draftData.grandTotal || 0).toLocaleString()}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-between items-center gap-2">
+                        {currentUserRole === 'Admin' || currentUserRole === 'Manager' ? (
+                          <>
+                            <button
+                              onClick={handleApprove}
+                              className="w-1/2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold py-2 px-3 rounded-lg text-[10px] uppercase cursor-pointer flex items-center justify-center gap-1 shadow-sm transition-all shadow-md"
+                            >
+                              <CheckCircle className="w-3.5 h-3.5 text-white" /> Approve override
+                            </button>
+                            <button
+                              onClick={handleReject}
+                              className="w-1/2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold py-2 px-3 border border-rose-200 rounded-lg text-[10px] uppercase cursor-pointer flex items-center justify-center gap-1 transition-all"
+                            >
+                              <X className="w-3.5 h-3.5 text-rose-600" /> Decline
+                            </button>
+                          </>
+                        ) : (
+                          <div className="w-full text-center py-2 bg-slate-50 border border-slate-200 rounded-lg">
+                            <span className="text-[9px] text-slate-450 font-semibold flex items-center justify-center gap-1 leading-none">
+                              🔒 Awaiting review by Sarah Manager (Manager) or Ahmad Admin
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 block-print-hide">
           {/* List panel */}
           <div className="lg:col-span-2 space-y-4">
             <div className="bg-white rounded-2xl p-4 border border-slate-200 flex flex-col md:flex-row gap-3 items-center justify-between">
@@ -1200,7 +1361,19 @@ export default function InvoiceModule({
                           <td className="py-4 px-6">
                             <span className="font-extrabold text-slate-900 text-sm block">{inv.customerName}</span>
                             <span className="text-[10px] text-slate-400 block mt-0.5">
-                              Email: {inv.customerEmail} | {inv.bookingId ? `Booking: ${inv.bookingId}` : 'Ad-hoc invoice'}
+                              Email: {inv.customerEmail} | {inv.bookingId ? (
+                                <span>
+                                  Booking: <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onDocumentLinkClick?.(inv.bookingId!);
+                                    }}
+                                    className="text-amber-605 hover:text-amber-700 underline font-extrabold cursor-pointer text-[10px]"
+                                  >
+                                    {inv.bookingId}
+                                  </button>
+                                </span>
+                              ) : 'Ad-hoc invoice'}
                             </span>
                           </td>
                           <td className="py-4 px-6">
@@ -1683,6 +1856,7 @@ export default function InvoiceModule({
             )}
           </div>
         </div>
+      </div>
       )}
 
       {/* ======================= TAB 2: CREATE INVOICE ======================= */}
@@ -2439,6 +2613,233 @@ export default function InvoiceModule({
         </div>
       )}
 
+      {/* ======================= TAB 6: UPDATE EXCHANGE RATES ======================= */}
+      {activeSubTab === 'rates' && (
+        <ExchangeRateSettings
+          exchangeRates={EXCHANGE_RATES}
+          onRefreshDatabase={onRefreshDatabase}
+          currentUserEmail={currentUserEmail}
+          currentUserName={currentUserName}
+        />
+      )}
+
+    </div>
+  );
+}
+
+interface ExchangeRateSettingsProps {
+  exchangeRates: Record<string, number>;
+  onRefreshDatabase?: () => Promise<void>;
+  currentUserEmail: string;
+  currentUserName: string;
+}
+
+function ExchangeRateSettings({
+  exchangeRates,
+  onRefreshDatabase,
+  currentUserEmail,
+  currentUserName
+}: ExchangeRateSettingsProps) {
+  const [rates, setRates] = useState({
+    SGD: exchangeRates.SGD || 3.3,
+    SAR: exchangeRates.SAR || 1.2,
+    IDR: exchangeRates.IDR || 0.0003
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Live conversion calculator state for user testing
+  const [testAmount, setTestAmount] = useState<number>(1000);
+  const [testCurrency, setTestCurrency] = useState<'SAR' | 'SGD' | 'IDR'>('SAR');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    setSuccessMsg(null);
+    setErrorMsg(null);
+
+    try {
+      const res = await fetch('/api/exchange-rates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rates,
+          authorEmail: currentUserEmail,
+          authorName: currentUserName
+        })
+      });
+      if (res.ok) {
+        setSuccessMsg("System currency exchange rates updated successfully. All calculations and ledger values are now synchronized.");
+        if (onRefreshDatabase) {
+          await onRefreshDatabase();
+        }
+      } else {
+        const data = await res.json();
+        setErrorMsg(data.error || "Failed to update exchange rates.");
+      }
+    } catch (err) {
+      setErrorMsg("Network error occurred. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Safe live conversion calculations
+  const calculateTestConversion = () => {
+    const rate = testCurrency === 'IDR' ? rates.IDR : rates[testCurrency];
+    return (testAmount * rate).toFixed(2);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl p-6 border border-slate-200 mt-4 max-w-2xl mx-auto block-print-hide space-y-6">
+      <div>
+        <h3 className="text-base font-bold text-slate-900 leading-none">Operational Currency Exchange Desk</h3>
+        <p className="text-xs text-slate-400 mt-1.5 leading-relaxed font-sans">
+          Update the global exchange rates used to calculate room rates, service additions, invoice conversions, and ledger metrics. Rates are specified relative to <strong>1 unit of foreign currency = MYR</strong>.
+        </p>
+      </div>
+
+      {successMsg && (
+        <div className="bg-emerald-50 text-emerald-800 p-4 border border-emerald-200 rounded-xl text-xs font-bold leading-relaxed flex items-center gap-2">
+          <CheckCircle className="w-4 h-4 text-emerald-700 shrink-0" />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="bg-rose-50 text-rose-800 p-4 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-rose-700 shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-1">
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide">Base Currency</span>
+            <div className="text-xs font-extrabold text-slate-900 p-2.5 bg-white border border-slate-200 rounded-lg flex items-center justify-between">
+              <span>MYR (Malaysian Ringgit)</span>
+              <span className="text-emerald-850">1.0000</span>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">SAR Rate (Saudi Riyal)</label>
+            <div className="relative">
+              <input
+                type="number"
+                step="0.0001"
+                min="0.0001"
+                value={rates.SAR}
+                onChange={e => setRates({ ...rates, SAR: parseFloat(e.target.value) || 0 })}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-800"
+                required
+              />
+              <span className="absolute right-3 top-3 text-[9px] text-slate-400 font-bold uppercase block-print-hide">MYR/SAR</span>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide">SGD Rate (Singapore Dollar)</label>
+            <div className="relative">
+              <input
+                type="number"
+                step="0.0001"
+                min="0.0001"
+                value={rates.SGD}
+                onChange={e => setRates({ ...rates, SGD: parseFloat(e.target.value) || 0 })}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-800"
+                required
+              />
+              <span className="absolute right-3 top-3 text-[9px] text-slate-400 font-bold uppercase block-print-hide">MYR/SGD</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col md:flex-row gap-4 items-center">
+          <div className="w-full md:w-1/2 space-y-1">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wide block">IDR Rate (Indonesian Rupiah)</label>
+            <div className="relative">
+              <input
+                type="number"
+                step="0.000001"
+                min="0.000001"
+                value={rates.IDR}
+                onChange={e => setRates({ ...rates, IDR: parseFloat(e.target.value) || 0 })}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-800"
+                required
+              />
+              <span className="absolute right-3 top-3 text-[9px] text-slate-400 font-bold uppercase block-print-hide">MYR/IDR</span>
+            </div>
+            <p className="text-[9px] text-slate-400">Specify IDR rate directly, e.g., 0.0003 means 1 IDR = 0.0003 MYR (3.00 MYR per 10,000 IDR).</p>
+          </div>
+
+          <div className="w-full md:w-1/2 bg-white rounded-xl p-3.5 border border-slate-200 space-y-2">
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block">Active Rate Indicators</span>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="bg-slate-50 p-1.5 rounded text-xs">
+                <div className="text-[8px] font-black text-slate-400 uppercase">1 SAR</div>
+                <div className="font-bold text-slate-800">MYR {rates.SAR}</div>
+              </div>
+              <div className="bg-slate-50 p-1.5 rounded text-xs">
+                <div className="text-[8px] font-black text-slate-400 uppercase">1 SGD</div>
+                <div className="font-bold text-slate-800">MYR {rates.SGD}</div>
+              </div>
+              <div className="bg-slate-50 p-1.5 rounded text-xs">
+                <div className="text-[8px] font-black text-slate-400 uppercase font-sans">10k IDR</div>
+                <div className="font-bold text-slate-800">MYR {(rates.IDR * 10000).toFixed(2)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Live Conversion Sandbox Tool */}
+        <div className="border border-slate-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+            <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest leading-none">Invoicing Impact Calculator Sandbox</h4>
+          </div>
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            <div className="w-full sm:w-1/3">
+              <div className="relative">
+                <input
+                  type="number"
+                  value={testAmount}
+                  onChange={e => setTestAmount(parseFloat(e.target.value) || 0)}
+                  className="w-full border rounded-lg p-2 text-xs font-semibold focus:outline-none"
+                  placeholder="Test Amount"
+                />
+              </div>
+            </div>
+            <div className="w-full sm:w-1/4">
+              <select
+                value={testCurrency}
+                onChange={e => setTestCurrency(e.target.value as any)}
+                className="w-full border rounded-lg p-2 text-xs font-bold focus:outline-none"
+              >
+                <option value="SAR">SAR (Saudi Riyal)</option>
+                <option value="SGD">SGD (Singapore Dollar)</option>
+                <option value="IDR">IDR (Indonesian Rupiah)</option>
+              </select>
+            </div>
+            <div className="w-full sm:w-5/12 text-center sm:text-right">
+              <span className="text-xs text-slate-500">Yields dynamic equivalent:</span>
+              <div className="text-base font-black text-emerald-950 font-mono">
+                MYR {calculateTestConversion()}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={isSaving}
+          className="w-full bg-emerald-950 text-white font-extrabold hover:bg-emerald-900 py-3 rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+        >
+          {isSaving ? "Updating Exchange Matrix..." : "Lock In & Propagate System Exchange Rates"}
+        </button>
+      </form>
     </div>
   );
 }
