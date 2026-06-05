@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Download, Upload, AlertTriangle, CheckCircle, HelpCircle, FileText, ArrowRight, Save, Sliders, X, RefreshCw } from 'lucide-react';
+import { Download, Upload, AlertTriangle, CheckCircle, HelpCircle, FileText, ArrowRight, Save, Sliders, X, RefreshCw, Pencil, Check } from 'lucide-react';
 import { BookingItem, HotelContract, RoomAllocation, B2BPartner, Language } from '../types';
 
 interface ImportExportManagerProps {
@@ -54,6 +54,63 @@ export default function ImportExportManager({
   const [manualRowHotels, setManualRowHotels] = useState<Record<number, string>>({});
   const [manualRowPartners, setManualRowPartners] = useState<Record<number, string>>({});
 
+  // Dynamic row-level selection & custom edits states
+  const [selectedRows, setSelectedRows] = useState<Record<number, boolean>>({});
+  const [rowOverrides, setRowOverrides] = useState<Record<number, Record<string, any>>>({});
+  const [completeImportedRowNums, setCompleteImportedRowNums] = useState<Set<number>>(new Set());
+  const [editingRowNum, setEditingRowNum] = useState<number | null>(null);
+  const [tempEditValues, setTempEditValues] = useState<Record<string, any>>({});
+
+  // Row selection helpers
+  const isRowSelected = (rowNum: number) => {
+    if (selectedRows[rowNum] === undefined) {
+      return true; // default to checked
+    }
+    return selectedRows[rowNum];
+  };
+
+  const toggleRowSelection = (rowNum: number) => {
+    setSelectedRows(prev => ({
+      ...prev,
+      [rowNum]: !isRowSelected(rowNum)
+    }));
+  };
+
+  // Inline row edits helpers
+  const handleStartEditRow = (row: ParsedRow) => {
+    setEditingRowNum(row.rowNum);
+    setTempEditValues({
+      company: row.company,
+      hotel: row.hotel,
+      checkIn: row.checkIn,
+      checkOut: row.checkOut,
+      doubleCount: row.doubleCount,
+      tripleCount: row.tripleCount,
+      quadCount: row.quadCount,
+      quintCount: row.quintCount,
+      paxCount: row.paxCount,
+      series: row.series,
+      ref: row.ref
+    });
+  };
+
+  const handleSaveEditRow = (rowNum: number) => {
+    setRowOverrides(prev => ({
+      ...prev,
+      [rowNum]: {
+        ...prev[rowNum],
+        ...tempEditValues
+      }
+    }));
+    setEditingRowNum(null);
+    setTempEditValues({});
+  };
+
+  const handleCancelEditRow = () => {
+    setEditingRowNum(null);
+    setTempEditValues({});
+  };
+
   // Reset all import state
   const handleClearImport = () => {
     setRawHeaders([]);
@@ -63,6 +120,11 @@ export default function ImportExportManager({
     setImportSummary(null);
     setManualRowHotels({});
     setManualRowPartners({});
+    setSelectedRows({});
+    setRowOverrides({});
+    setCompleteImportedRowNums(new Set());
+    setEditingRowNum(null);
+    setTempEditValues({});
   };
 
   // Template Download logic
@@ -165,7 +227,7 @@ export default function ImportExportManager({
   const parsedRows: ParsedRow[] = useMemo(() => {
     if (rawLines.length === 0 || Object.keys(columnMappings).length === 0) return [];
     
-    return rawLines.map((line, index) => {
+    const rows = rawLines.map((line, index) => {
       const cols = parseCSVLine(line);
       const rowObj: Record<string, string> = {};
       rawHeaders.forEach((header, colIdx) => {
@@ -173,24 +235,25 @@ export default function ImportExportManager({
       });
 
       const rowNum = index + 1;
+      const overrides = rowOverrides[rowNum] || {};
 
-      // Extract raw mapped cell text values
-      const companyVal = columnMappings['company'] ? rowObj[columnMappings['company']] : '';
-      const checkInVal = columnMappings['checkIn'] ? rowObj[columnMappings['checkIn']] : '';
-      const checkOutVal = columnMappings['checkOut'] ? rowObj[columnMappings['checkOut']] : '';
-      const hotelVal = columnMappings['hotel'] ? rowObj[columnMappings['hotel']] : '';
-      const hotelIdVal = columnMappings['hotelId'] ? rowObj[columnMappings['hotelId']] : '';
-      const paxVal = parseInt(columnMappings['paxCount'] ? rowObj[columnMappings['paxCount']] : '0') || 0;
+      // Extract raw mapped cell text values or overridden values
+      const companyVal = overrides.company !== undefined ? overrides.company : (columnMappings['company'] ? rowObj[columnMappings['company']] : '');
+      const checkInVal = overrides.checkIn !== undefined ? overrides.checkIn : (columnMappings['checkIn'] ? rowObj[columnMappings['checkIn']] : '');
+      const checkOutVal = overrides.checkOut !== undefined ? overrides.checkOut : (columnMappings['checkOut'] ? rowObj[columnMappings['checkOut']] : '');
+      const hotelVal = overrides.hotel !== undefined ? overrides.hotel : (columnMappings['hotel'] ? rowObj[columnMappings['hotel']] : '');
+      const hotelIdVal = overrides.hotelId !== undefined ? overrides.hotelId : (columnMappings['hotelId'] ? rowObj[columnMappings['hotelId']] : '');
+      const paxVal = overrides.paxCount !== undefined ? parseInt(overrides.paxCount) || 0 : (parseInt(columnMappings['paxCount'] ? rowObj[columnMappings['paxCount']] : '0') || 0);
       
-      const doubleCount = parseInt(columnMappings['doubleCount'] ? rowObj[columnMappings['doubleCount']] : '0') || 0;
-      const tripleCount = parseInt(columnMappings['tripleCount'] ? rowObj[columnMappings['tripleCount']] : '0') || 0;
-      const quadCount = parseInt(columnMappings['quadCount'] ? rowObj[columnMappings['quadCount']] : '0') || 0;
-      const quintCount = parseInt(columnMappings['quintCount'] ? rowObj[columnMappings['quintCount']] : '0') || 0;
-      const totalRoomsMapped = parseInt(columnMappings['totalRooms'] ? rowObj[columnMappings['totalRooms']] : '0') || 0;
+      const doubleCount = overrides.doubleCount !== undefined ? parseInt(overrides.doubleCount) || 0 : (parseInt(columnMappings['doubleCount'] ? rowObj[columnMappings['doubleCount']] : '0') || 0);
+      const tripleCount = overrides.tripleCount !== undefined ? parseInt(overrides.tripleCount) || 0 : (parseInt(columnMappings['tripleCount'] ? rowObj[columnMappings['tripleCount']] : '0') || 0);
+      const quadCount = overrides.quadCount !== undefined ? parseInt(overrides.quadCount) || 0 : (parseInt(columnMappings['quadCount'] ? rowObj[columnMappings['quadCount']] : '0') || 0);
+      const quintCount = overrides.quintCount !== undefined ? parseInt(overrides.quintCount) || 0 : (parseInt(columnMappings['quintCount'] ? rowObj[columnMappings['quintCount']] : '0') || 0);
+      const totalRoomsMapped = overrides.totalRooms !== undefined ? parseInt(overrides.totalRooms) || 0 : (parseInt(columnMappings['totalRooms'] ? rowObj[columnMappings['totalRooms']] : '0') || 0);
       const totalRooms = totalRoomsMapped || (doubleCount + tripleCount + quadCount + quintCount);
 
-      const seriesVal = columnMappings['series'] ? rowObj[columnMappings['series']] : '';
-      const refVal = columnMappings['ref'] ? rowObj[columnMappings['ref']] : '';
+      const seriesVal = overrides.series !== undefined ? overrides.series : (columnMappings['series'] ? rowObj[columnMappings['series']] : '');
+      const refVal = overrides.ref !== undefined ? overrides.ref : (columnMappings['ref'] ? rowObj[columnMappings['ref']] : '');
 
       const errors: { field: string; message: string }[] = [];
       const warnings: { field: string; message: string }[] = [];
@@ -392,7 +455,7 @@ export default function ImportExportManager({
 
       return {
         rowNum,
-        rawObj,
+        rawObj: rowObj,
         company: companyVal,
         checkIn: checkInVal,
         checkOut: checkOutVal,
@@ -416,7 +479,9 @@ export default function ImportExportManager({
         suggestions
       };
     });
-  }, [rawLines, rawHeaders, columnMappings, hotelContracts, bookings, manualRowHotels, manualRowPartners, partners]);
+
+    return rows.filter(r => !completeImportedRowNums.has(r.rowNum));
+  }, [rawLines, rawHeaders, columnMappings, hotelContracts, bookings, manualRowHotels, manualRowPartners, partners, rowOverrides, completeImportedRowNums]);
 
   // Handle manual rows updates
   const handleManualRowHotelMap = (rowNum: number, hotelId: string) => {
@@ -429,9 +494,9 @@ export default function ImportExportManager({
 
   // Convert parsed valid rows into bookings on backend independently (Fault-tolerant)
   const handleConfirmImport = async () => {
-    const importableRows = parsedRows.filter(r => r.status === 'valid' || r.status === 'warning');
+    const importableRows = parsedRows.filter(r => (r.status === 'valid' || r.status === 'warning') && isRowSelected(r.rowNum));
     if (importableRows.length === 0) {
-      alert("No valid rows or warning rows exist to import. Correct manual mappings and try again.");
+      alert("No valid or warning rows are selected to import. Choose which data to confirm and try again.");
       return;
     }
 
@@ -439,7 +504,7 @@ export default function ImportExportManager({
     let successCount = 0;
     let failCount = 0;
 
-    const importedRowNums = new Set<number>();
+    const newlyImportedRowNums = new Set<number>();
 
     for (const r of importableRows) {
       try {
@@ -505,7 +570,7 @@ export default function ImportExportManager({
 
         if (res.ok) {
           successCount++;
-          importedRowNums.add(r.rowNum);
+          newlyImportedRowNums.add(r.rowNum);
         } else {
           const errMsg = await res.json().catch(() => ({ error: 'Server boundary conflict' }));
           failCount++;
@@ -519,33 +584,39 @@ export default function ImportExportManager({
       }
     }
 
-    // Keep only non-imported / failed rows in the spreadsheet preview for re-import
-    const remainingRows = parsedRows.filter(r => !importedRowNums.has(r.rowNum));
-    
-    // Clear the raw rows and re-populate rawLines with the failed/unimported lines in order to keep working with failed only!
-    if (remainingRows.length > 0) {
-      // Re-map to raw state
-      const nextRawLines = remainingRows.map(r => {
-        return rawHeaders.map(h => r.rawObj[h] || '').join(',');
-      });
-      setRawLines(nextRawLines);
-      // Clear specific row overrides for successfully imported keys to avoid leak
-      setManualRowHotels(prev => {
-        const next = { ...prev };
-        importedRowNums.forEach(num => { delete next[num]; });
-        return next;
-      });
-      setManualRowPartners(prev => {
-        const next = { ...prev };
-        importedRowNums.forEach(num => { delete next[num]; });
-        return next;
-      });
-    } else {
-      setRawLines([]);
-    }
+    // Mark these as completely imported so they are filtered out
+    setCompleteImportedRowNums(prev => {
+      const next = new Set(prev);
+      newlyImportedRowNums.forEach(num => next.add(num));
+      return next;
+    });
+
+    // Clean up corresponding manual selections to avoid memory leaks
+    setManualRowHotels(prev => {
+      const next = { ...prev };
+      newlyImportedRowNums.forEach(num => { delete next[num]; });
+      return next;
+    });
+    setManualRowPartners(prev => {
+      const next = { ...prev };
+      newlyImportedRowNums.forEach(num => { delete next[num]; });
+      return next;
+    });
+    setRowOverrides(prev => {
+      const next = { ...prev };
+      newlyImportedRowNums.forEach(num => { delete next[num]; });
+      return next;
+    });
+    setSelectedRows(prev => {
+      const next = { ...prev };
+      newlyImportedRowNums.forEach(num => { delete next[num]; });
+      return next;
+    });
 
     setIsLoading(false);
-    setImportSummary(`Bulk operations finished! Successfully imported ${successCount} confirmed group reservation(s). Failed/Retained for correction: ${failCount + (parsedRows.length - importableRows.length)}.`);
+    
+    const remainingCount = parsedRows.length - newlyImportedRowNums.size;
+    setImportSummary(`Bulk operations finished! Successfully imported ${successCount} confirmed group reservation(s). Remaining/Retained for correction: ${remainingCount}.`);
     
     await onRefreshDatabase();
   };
@@ -812,14 +883,33 @@ export default function ImportExportManager({
               <table className="w-full text-[11px] font-sans border-collapse">
                 <thead>
                   <tr className="bg-slate-100 border-b border-slate-200 text-slate-650 text-[10px] font-bold uppercase text-left">
-                    <th className="p-3">Row</th>
+                    <th className="p-3 w-[70px] text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={parsedRows.length > 0 && parsedRows.every(r => isRowSelected(r.rowNum))}
+                          onChange={(e) => {
+                            const allSelected = parsedRows.every(r => isRowSelected(r.rowNum));
+                            const next: Record<number, boolean> = {};
+                            parsedRows.forEach(r => {
+                              next[r.rowNum] = !allSelected;
+                            });
+                            setSelectedRows(next);
+                          }}
+                          className="rounded border-slate-300 text-emerald-800 focus:ring-emerald-800 cursor-pointer"
+                          title="Select / Deselect all rows"
+                        />
+                        <span>Row</span>
+                      </div>
+                    </th>
                     <th className="p-3">B2B Company / Partner</th>
                     <th className="p-3">Cleaned Mapped Hotel (Contract Link)</th>
                     <th className="p-3">Check In/Out</th>
                     <th className="p-3">Allotments</th>
                     <th className="p-3 text-center">Pax</th>
-                    <th className="p-3 text-center">Aero Ref</th>
+                    <th className="p-3 text-center">Aero Ref & Series</th>
                     <th className="p-3">Validation & Dynamic Suggestions</th>
+                    <th className="p-3 text-center w-[120px]">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-150">
@@ -830,86 +920,238 @@ export default function ImportExportManager({
 
                     return (
                       <tr key={row.rowNum} className={`${bgShade} transition-colors`}>
-                        {/* Row number */}
-                        <td className="p-3 font-mono font-bold text-slate-400">{row.rowNum}</td>
+                        {/* Select row & Row number */}
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isRowSelected(row.rowNum)}
+                              onChange={() => toggleRowSelection(row.rowNum)}
+                              className="rounded border-slate-300 text-emerald-800 focus:ring-emerald-800 cursor-pointer"
+                            />
+                            <span className="font-mono font-bold text-slate-400">{row.rowNum}</span>
+                          </div>
+                        </td>
                         
                         {/* Company & Mapped Partner */}
                         <td className="p-3 space-y-1">
-                          <div className={`font-extrabold text-slate-900 ${row.errors.some(e => e.field === 'company') ? 'p-1 bg-red-100/50 border border-red-300 rounded' : ''}`}>
-                            {row.company || <span className="text-red-500 italic">[Empty]</span>}
-                          </div>
-                          <div>
-                            {/* Manual partner selection box */}
-                            <select
-                              value={row.matchedPartnerId}
-                              onChange={(e) => handleManualRowPartnerMap(row.rowNum, e.target.value)}
-                              className="text-[9px] bg-slate-100 border border-slate-250 rounded px-1.5 py-0.5 outline-none font-bold text-slate-600 block cursor-pointer max-w-[150px]"
-                              title="Connect B2B partner agent"
-                            >
-                              <option value="">[Direct Corporate Client]</option>
-                              {partners.map(p => (
-                                <option key={p.id} value={p.id}>{p.companyName}</option>
-                              ))}
-                            </select>
-                          </div>
+                          {editingRowNum === row.rowNum ? (
+                            <div className="space-y-1">
+                              <span className="text-[9px] font-semibold text-slate-400 block uppercase">B2B Company:</span>
+                              <input
+                                type="text"
+                                value={tempEditValues.company ?? ''}
+                                onChange={(e) => setTempEditValues(prev => ({ ...prev, company: e.target.value }))}
+                                className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-900 focus:ring-1 focus:ring-emerald-800 focus:outline-none"
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`font-extrabold text-slate-900 ${row.errors.some(e => e.field === 'company') ? 'p-1 bg-red-100/50 border border-red-300 rounded' : ''}`}>
+                                {row.company || <span className="text-red-500 italic">[Empty]</span>}
+                              </div>
+                              <div>
+                                {/* Manual partner selection box */}
+                                <select
+                                  value={row.matchedPartnerId}
+                                  onChange={(e) => handleManualRowPartnerMap(row.rowNum, e.target.value)}
+                                  className="text-[9px] bg-slate-100 border border-slate-250 rounded px-1.5 py-0.5 outline-none font-bold text-slate-600 block cursor-pointer max-w-[150px]"
+                                  title="Connect B2B partner agent"
+                                >
+                                  <option value="">[Direct Corporate Client]</option>
+                                  {partners.map(p => (
+                                    <option key={p.id} value={p.id}>{p.companyName}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </>
+                          )}
                         </td>
 
                         {/* Hotel mapping spelling resolver */}
-                        <td className="p-3 space-y-1">
-                          <div className={`font-medium ${row.errors.some(e => e.field === 'hotel') ? 'p-1.5 bg-red-100/50 border border-red-350 rounded text-red-750 font-bold' : 'text-slate-800'}`}>
-                            {row.hotel || <span className="italic">[Empty Hotel spelling]</span>}
-                          </div>
-                          
-                          {/* Live hotel contract resolver selector */}
-                          <div>
-                            <select
-                              value={row.matchedHotelId}
-                              onChange={(e) => handleManualRowHotelMap(row.rowNum, e.target.value)}
-                              className={`text-[9px] rounded px-1.5 py-0.5 font-extrabold outline-none tracking-wide block cursor-pointer ${row.matchedHotelId ? 'bg-emerald-50 text-emerald-8 border border-emerald-250' : 'bg-amber-50 text-amber-8 border border-amber-250 animate-bounce'}`}
-                              title="Override matched contract mapping"
-                            >
-                              <option value="">-- Click to Link Hotel Contract --</option>
-                              {hotelContracts.map(c => (
-                                <option key={c.id} value={c.id}>{c.hotelName}</option>
-                              ))}
-                            </select>
-                          </div>
+                        <td className="p-3 space-y-1 min-w-[180px]">
+                          {editingRowNum === row.rowNum ? (
+                            <div className="space-y-1">
+                              <span className="text-[9px] font-semibold text-slate-400 block uppercase">Spelling Search Text:</span>
+                              <input
+                                type="text"
+                                value={tempEditValues.hotel ?? ''}
+                                onChange={(e) => setTempEditValues(prev => ({ ...prev, hotel: e.target.value }))}
+                                className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-medium text-slate-900 focus:ring-1 focus:ring-emerald-800 focus:outline-none"
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`font-medium ${row.errors.some(e => e.field === 'hotel') ? 'p-1.5 bg-red-100/50 border border-red-350 rounded text-red-750 font-bold' : 'text-slate-800'}`}>
+                                {row.hotel || <span className="italic">[Empty Hotel spelling]</span>}
+                              </div>
+                              
+                              {/* Live hotel contract resolver selector */}
+                              <div>
+                                <select
+                                  value={row.matchedHotelId}
+                                  onChange={(e) => handleManualRowHotelMap(row.rowNum, e.target.value)}
+                                  className={`text-[9px] rounded px-1.5 py-0.5 font-extrabold outline-none tracking-wide block cursor-pointer ${row.matchedHotelId ? 'bg-emerald-50 text-emerald-8 border border-emerald-250' : 'bg-amber-50 text-amber-8 border border-amber-250 animate-bounce'}`}
+                                  title="Override matched contract mapping"
+                                >
+                                  <option value="">-- Click to Link Hotel Contract --</option>
+                                  {hotelContracts.map(c => (
+                                    <option key={c.id} value={c.id}>{c.hotelName}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </>
+                          )}
                         </td>
 
                         {/* Dates */}
                         <td className="p-3 font-mono">
-                          <div className={`flex items-center gap-1 ${row.errors.some(e => e.field === 'dates') ? 'p-1.5 bg-red-100/50 border border-red-300 rounded text-red-700' : ''}`}>
-                            <span className="text-slate-800 font-bold">{row.checkIn || 'Empty'}</span>
-                            <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span className="text-slate-800 font-bold">{row.checkOut || 'Empty'}</span>
-                          </div>
-                          {row.warnings.filter(w => w.field === 'dates').map((w, idx) => (
-                            <span key={idx} className="text-[9px] text-amber-700 font-semibold block mt-1">⚠️ {w.message}</span>
-                          ))}
+                          {editingRowNum === row.rowNum ? (
+                            <div className="space-y-1.5">
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Check In:</span>
+                                <input
+                                  type="date"
+                                  value={tempEditValues.checkIn ?? ''}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, checkIn: e.target.value }))}
+                                  className="bg-white border border-slate-300 rounded px-1 py-0.5 text-[10px] font-mono font-bold focus:outline-emerald-800 focus:ring-1 focus:ring-emerald-800"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Check Out:</span>
+                                <input
+                                  type="date"
+                                  value={tempEditValues.checkOut ?? ''}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, checkOut: e.target.value }))}
+                                  className="bg-white border border-slate-300 rounded px-1 py-0.5 text-[10px] font-mono font-bold focus:outline-emerald-800 focus:ring-1 focus:ring-emerald-800"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`flex items-center gap-1 ${row.errors.some(e => e.field === 'dates') ? 'p-1.5 bg-red-100/50 border border-red-300 rounded text-red-700' : ''}`}>
+                                <span className="text-slate-800 font-bold">{row.checkIn || 'Empty'}</span>
+                                <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span className="text-slate-800 font-bold">{row.checkOut || 'Empty'}</span>
+                              </div>
+                              {row.warnings.filter(w => w.field === 'dates').map((w, idx) => (
+                                <span key={idx} className="text-[9px] text-amber-700 font-semibold block mt-1">⚠️ {w.message}</span>
+                              ))}
+                            </>
+                          )}
                         </td>
 
                         {/* Allotments layout */}
                         <td className="p-3 font-mono">
-                          <div className={`${row.errors.some(e => e.field === 'rooms') ? 'p-1.5 bg-red-100/50 border border-red-300 rounded text-red-700' : 'text-slate-500'}`}>
-                            {row.doubleCount || 0} DB / {row.tripleCount || 0} TPL / {row.quadCount || 0} QUAD / {row.quintCount || 0} QUINT
-                          </div>
-                          {row.warnings.filter(w => w.field === 'rooms').map((w, idx) => (
-                            <span key={idx} className="text-[9px] text-amber-700 font-bold block mt-1">⚠️ {w.message}</span>
-                          ))}
+                          {editingRowNum === row.rowNum ? (
+                            <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] w-[110px]">
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans">DB:</span>
+                                <input
+                                  type="number"
+                                  value={tempEditValues.doubleCount ?? 0}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, doubleCount: parseInt(e.target.value) || 0 }))}
+                                  className="w-10 bg-white border border-slate-300 rounded px-1 py-0.5 text-center font-bold"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans">TPL:</span>
+                                <input
+                                  type="number"
+                                  value={tempEditValues.tripleCount ?? 0}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, tripleCount: parseInt(e.target.value) || 0 }))}
+                                  className="w-10 bg-white border border-slate-300 rounded px-1 py-0.5 text-center font-bold"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans">QUAD:</span>
+                                <input
+                                  type="number"
+                                  value={tempEditValues.quadCount ?? 0}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, quadCount: parseInt(e.target.value) || 0 }))}
+                                  className="w-10 bg-white border border-slate-300 rounded px-1 py-0.5 text-center font-bold"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans">QUINT:</span>
+                                <input
+                                  type="number"
+                                  value={tempEditValues.quintCount ?? 0}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, quintCount: parseInt(e.target.value) || 0 }))}
+                                  className="w-10 bg-white border border-slate-300 rounded px-1 py-0.5 text-center font-bold"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`${row.errors.some(e => e.field === 'rooms') ? 'p-1.5 bg-red-100/50 border border-red-300 rounded text-red-700' : 'text-slate-500'}`}>
+                                {row.doubleCount || 0} DB / {row.tripleCount || 0} TPL / {row.quadCount || 0} QUAD / {row.quintCount || 0} QUINT
+                              </div>
+                              {row.warnings.filter(w => w.field === 'rooms').map((w, idx) => (
+                                <span key={idx} className="text-[9px] text-amber-700 font-bold block mt-1">⚠️ {w.message}</span>
+                              ))}
+                            </>
+                          )}
                         </td>
 
                         {/* Pax */}
                         <td className="p-3 text-center">
-                          <div className={`font-mono font-black text-slate-850 ${row.errors.some(e => e.field === 'pax') ? 'p-1.5 bg-red-100/50 border border-red-300 rounded text-red-700' : ''}`}>
-                            {row.paxCount}
-                          </div>
-                          {row.warnings.filter(w => w.field === 'pax').map((w, idx) => (
-                            <span key={idx} className="text-[9px] text-amber-700 font-bold block mt-1 leading-tight">⚠️ {w.message}</span>
-                          ))}
+                          {editingRowNum === row.rowNum ? (
+                            <div className="space-y-1">
+                              <span className="text-[8px] text-slate-400 block font-sans uppercase">Pax:</span>
+                              <input
+                                type="number"
+                                value={tempEditValues.paxCount ?? 0}
+                                onChange={(e) => setTempEditValues(prev => ({ ...prev, paxCount: parseInt(e.target.value) || 0 }))}
+                                className="w-12 bg-white border border-slate-300 rounded px-1 py-0.5 text-center text-[11px] font-mono font-bold focus:ring-1 focus:ring-emerald-850"
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`font-mono font-black text-slate-850 ${row.errors.some(e => e.field === 'pax') ? 'p-1.5 bg-red-100/50 border border-red-300 rounded text-red-700' : ''}`}>
+                                {row.paxCount}
+                              </div>
+                              {row.warnings.filter(w => w.field === 'pax').map((w, idx) => (
+                                <span key={idx} className="text-[9px] text-amber-700 font-bold block mt-1 leading-tight">⚠️ {w.message}</span>
+                              ))}
+                            </>
+                          )}
                         </td>
 
                         {/* Service tracking ref */}
-                        <td className="p-3 text-center font-mono font-bold text-slate-650">{row.ref || <span className="text-slate-350 italic">None</span>}</td>
+                        <td className="p-3 text-center font-mono">
+                          {editingRowNum === row.rowNum ? (
+                            <div className="space-y-1 w-[90px]">
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Ref:</span>
+                                <input
+                                  type="text"
+                                  value={tempEditValues.ref ?? ''}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, ref: e.target.value }))}
+                                  className="w-full bg-white border border-slate-300 rounded px-1 py-0.5 text-[9.5px] text-center font-mono focus:outline-emerald-800"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Series:</span>
+                                <input
+                                  type="text"
+                                  value={tempEditValues.series ?? ''}
+                                  onChange={(e) => setTempEditValues(prev => ({ ...prev, series: e.target.value }))}
+                                  className="w-full bg-white border border-slate-300 rounded px-1 py-0.5 text-[9.5px] text-center font-mono focus:outline-emerald-800"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-0.5">
+                              <div className="font-extrabold text-slate-800">{row.ref || <span className="text-slate-350 italic">None</span>}</div>
+                              {row.series && (
+                                <span className="text-[9px] bg-slate-100 border border-slate-200 text-slate-655 px-1 py-0.5 rounded block truncate">
+                                  Series: {row.series}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
 
                         {/* Validation & Suggestions UI */}
                         <td className="p-3">
@@ -966,6 +1208,36 @@ export default function ImportExportManager({
                                 </div>
                               )}
                             </div>
+                          )}
+                        </td>
+
+                        {/* Row custom Action cell */}
+                        <td className="p-3 text-center">
+                          {editingRowNum === row.rowNum ? (
+                            <div className="flex flex-col gap-1.5 items-center justify-center">
+                              <button
+                                onClick={() => handleSaveEditRow(row.rowNum)}
+                                className="w-full bg-emerald-850 hover:bg-emerald-900 text-white text-[10px] font-black py-1 px-2 rounded-lg flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                Save
+                              </button>
+                              <button
+                                onClick={handleCancelEditRow}
+                                className="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-bold py-1 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => handleStartEditRow(row)}
+                              className="bg-white hover:bg-slate-50 text-slate-700 hover:text-emerald-800 border border-slate-250 py-1.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-all shadow-2xs whitespace-nowrap"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              Edit Row
+                            </button>
                           )}
                         </td>
                       </tr>
